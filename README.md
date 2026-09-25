@@ -1,8 +1,10 @@
 # VScreens
 
-A **virtual screen manager for GNOME**: each physical monitor has its own spaces, switched on their own.
+**Independent virtual desktops per monitor on Ubuntu / GNOME** — like macOS Spaces, but each screen has its own stack.
 
-GNOME normally does one of two things — only the primary display changes, or **every** display changes together. VScreens does neither. You switch the screen under the mouse; the other screens stay exactly where they are.
+If you searched for *Ubuntu workspaces on one monitor only*, *separate virtual desktops per display*, or *GNOME workspaces not switching all screens together*, this is that.
+
+GNOME normally does one of two things: only the primary display changes, or **every** display changes together. VScreens does neither. It is a virtual screen manager: you switch the monitor under the mouse; the other screens stay exactly where they are.
 
 ![Switch popup on one monitor](screenshots/switch-popup.png)
 
@@ -12,17 +14,16 @@ GNOME normally does one of two things — only the primary display changes, or *
 
 *Switching spaces on one monitor. The other monitor does not move.*
 
-Tested on **Ubuntu 24.04** with **GNOME Shell 46** on **X11**.
+Tested on **Ubuntu 24.04** with **GNOME Shell 46** on **X11** and **Wayland**. Works with two or more monitors; a single screen still gets addable/removable spaces.
 
 ## Requirements
 
 - GNOME Shell 46
 - A multi-monitor setup (it works with one screen, but the point is per-monitor spaces)
-- `glib-compile-schemas` (from `libglib2.0-bin`, already present on Ubuntu)
-
-On X11 you can reload the extension with `Alt+F2`, `r`, Enter. On Wayland you have to log out and back in after install.
 
 ## Install
+
+The GNOME Extensions website listing is not up yet. Until then, install from git:
 
 ```bash
 git clone https://github.com/Florian-Bolli/ubuntu_vscreens.git
@@ -30,12 +31,23 @@ cd ubuntu_vscreens
 ./install.sh
 ```
 
+`install.sh` copies the extension to `~/.local/share/gnome-shell/extensions/vscreens@florianbolli.ch/` and enables it.
+
 Then reload GNOME Shell:
 
 - **X11:** `Alt+F2`, type `r`, press Enter
 - **Wayland:** log out and log back in
 
-`install.sh` compiles the settings schema, copies the extension to `~/.local/share/gnome-shell/extensions/vscreens@florian.local/`, and enables it.
+**From a zip** (the same bundle that will go on the store). Download `vscreens@florianbolli.ch.shell-extension.zip` from the latest [Actions](https://github.com/Florian-Bolli/ubuntu_vscreens/actions/workflows/pack.yml) run on `main`, then:
+
+```bash
+gnome-extensions install --force vscreens@florianbolli.ch.shell-extension.zip
+gnome-extensions enable vscreens@florianbolli.ch
+```
+
+Or GNOME’s **Extensions** app → menu → **Install from File…**. Then reload as above. To build the zip yourself: `./pack.sh`.
+
+**From the GNOME Extensions website** — not listed yet. After review, this will be the usual install.
 
 The extension also flips two GNOME settings it needs to work:
 
@@ -75,13 +87,15 @@ git pull
 ./install.sh
 ```
 
-Reload the shell again (`Alt+F2` → `r` on X11, or log out on Wayland).
+Reload the shell again (`Alt+F2` → `r` on X11, or log out on Wayland). When the store listing is live, you can update there instead.
 
 ## Uninstall
 
+Turn it off in **Extension Manager** or:
+
 ```bash
-gnome-extensions disable vscreens@florian.local
-rm -rf ~/.local/share/gnome-shell/extensions/vscreens@florian.local
+gnome-extensions disable vscreens@florianbolli.ch
+rm -rf ~/.local/share/gnome-shell/extensions/vscreens@florianbolli.ch
 ```
 
 Reload the shell. Then restore GNOME’s workspace settings if you want the stock behaviour back:
@@ -105,7 +119,17 @@ VScreens keeps every visible window on workspace 0 (the “stage”) and parks o
 # then Alt+F2 → r
 ```
 
-The extension source is `vscreens@florian.local/`. After edits, reinstall and reload.
+The extension source is `vscreens@florianbolli.ch/`. After edits, reinstall and reload.
+
+To build the store zip (`vscreens@florianbolli.ch.shell-extension.zip`):
+
+```bash
+./pack.sh
+```
+
+Every push and pull request to `main` also runs `./pack.sh` in GitHub Actions and attaches that zip as an artifact.
+
+Upload that file at [extensions.gnome.org/upload](https://extensions.gnome.org/upload/). Do not zip the git repo or the extension folder by hand.
 
 ## License
 

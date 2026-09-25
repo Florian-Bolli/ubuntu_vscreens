@@ -2,5 +2,6 @@ vendor/
 reference/
 restore-settings.sh
 *.compiled
+*.shell-extension.zip
 *~
 .DS_Store

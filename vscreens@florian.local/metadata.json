@@ -1,8 +1,0 @@
-{
-  "uuid": "vscreens@florian.local",
-  "name": "VScreens",
-  "description": "Independent virtual desktops per monitor, macOS-style. Each screen keeps its own set of spaces that can be switched, added and removed without affecting the other screens.",
-  "shell-version": ["46"],
-  "settings-schema": "org.gnome.shell.extensions.vscreens",
-  "version": 1
-}
