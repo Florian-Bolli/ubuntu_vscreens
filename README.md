@@ -8,7 +8,7 @@ GNOME normally does one of two things — only the primary display changes, or *
 
 *The switch popup lives on the monitor you just changed. Live thumbnails, close with ×, settings via the gear.*
 
-<video src="screenshots/switch-one-monitor.webm" autoplay loop muted playsinline></video>
+![Switching spaces on one monitor](screenshots/switch-one-monitor.gif)
 
 *Switching spaces on one monitor. The other monitor does not move.*
 
