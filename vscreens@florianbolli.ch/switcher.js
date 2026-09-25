@@ -8,7 +8,8 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import {createThumbnailWithClose} from './thumbnails.js';
 
-const FADE_TIME = 120;
+const FADE_IN_MS = 120;
+const FADE_OUT_MS = 100;
 
 /**
  * Transient overlay showing every space on one monitor, with the current one
@@ -30,6 +31,7 @@ class SpaceSwitcherPopup extends Clutter.Actor {
         this._settings = settings;
         this._openPrefs = openPrefs;
         this._hideTimeoutId = 0;
+        this._fadingOut = false;
 
         this.add_constraint(new Layout.MonitorConstraint({index: monitorIndex}));
 
@@ -95,12 +97,14 @@ class SpaceSwitcherPopup extends Clutter.Actor {
     showSpace(spaceIndex, nSpaces) {
         this._rebuild(spaceIndex, nSpaces);
 
-        if (!this.visible) {
+        if (!this.visible || this._fadingOut) {
+            this._fadingOut = false;
+            this.remove_all_transitions();
             this.visible = true;
             this.opacity = 0;
             this.ease({
                 opacity: 255,
-                duration: FADE_TIME,
+                duration: FADE_IN_MS,
                 mode: Clutter.AnimationMode.EASE_OUT_QUAD,
             });
         }
@@ -208,11 +212,19 @@ class SpaceSwitcherPopup extends Clutter.Actor {
     }
 
     _fadeOut() {
+        if (!this.visible || this._fadingOut)
+            return;
+
+        this._fadingOut = true;
+        this.remove_all_transitions();
         this.ease({
             opacity: 0,
-            duration: FADE_TIME,
+            duration: FADE_OUT_MS,
             mode: Clutter.AnimationMode.EASE_OUT_QUAD,
             onComplete: () => {
+                if (!this._fadingOut)
+                    return;
+                this._fadingOut = false;
                 this.visible = false;
                 // Drop the clones while hidden; they are rebuilt on the next
                 // switch anyway and the content would be stale.
