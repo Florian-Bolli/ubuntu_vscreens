@@ -1,0 +1,6 @@
+vendor/
+reference/
+restore-settings.sh
+*.compiled
+*~
+.DS_Store

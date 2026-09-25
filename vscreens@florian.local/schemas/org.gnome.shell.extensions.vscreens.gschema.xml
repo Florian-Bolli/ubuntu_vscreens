@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist gettext-domain="vscreens">
+  <schema id="org.gnome.shell.extensions.vscreens" path="/org/gnome/shell/extensions/vscreens/">
+
+    <key name="spaces-per-monitor" type="i">
+      <default>4</default>
+      <range min="1" max="12"/>
+      <summary>Spaces per monitor</summary>
+      <description>How many virtual desktops each monitor starts with.</description>
+    </key>
+
+    <key name="animation-duration" type="i">
+      <default>250</default>
+      <range min="0" max="1000"/>
+      <summary>Slide duration in milliseconds</summary>
+      <description>Set to 0 to switch instantly with no animation.</description>
+    </key>
+
+    <key name="active-monitor-mode" type="s">
+      <default>'pointer'</default>
+      <summary>How the target monitor is chosen</summary>
+      <description>Either 'pointer' (monitor under the mouse) or 'focus' (monitor of the focused window, falling back to the pointer).</description>
+    </key>
+
+    <key name="hide-overview-thumbnails" type="b">
+      <default>true</default>
+      <summary>Hide the Overview workspace strip</summary>
+      <description>The stock workspace thumbnails are meaningless with per-monitor spaces, so hide them.</description>
+    </key>
+
+    <key name="show-indicator" type="b">
+      <default>true</default>
+      <summary>Show a panel indicator</summary>
+      <description>Show the current space of every monitor in the top panel.</description>
+    </key>
+
+    <key name="show-osd" type="b">
+      <default>true</default>
+      <summary>Show an on-screen indicator when switching</summary>
+      <description>Briefly show the new space number on the monitor that switched.</description>
+    </key>
+
+    <key name="add-space" type="as">
+      <default><![CDATA[['<Super><Alt>equal']]]></default>
+      <summary>Add a space to the current monitor</summary>
+      <description></description>
+    </key>
+
+    <key name="remove-space" type="as">
+      <default><![CDATA[['<Super><Alt>minus']]]></default>
+      <summary>Remove the current space from the current monitor</summary>
+      <description></description>
+    </key>
+
+  </schema>
+</schemalist>

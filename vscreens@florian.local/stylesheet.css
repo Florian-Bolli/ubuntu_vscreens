@@ -1,0 +1,109 @@
+.vscreens-indicator {
+  spacing: 0;
+  padding: 0 4px;
+}
+
+.vscreens-monitor {
+  spacing: 4px;
+  padding: 3px 6px;
+  border-radius: 9px;
+}
+
+.vscreens-monitor-active {
+  background-color: rgba(255, 255, 255, 0.12);
+}
+
+.vscreens-separator {
+  width: 1px;
+  height: 12px;
+  margin: 0 5px;
+  background-color: rgba(255, 255, 255, 0.25);
+}
+
+.vscreens-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 3px;
+  background-color: rgba(255, 255, 255, 0.35);
+}
+
+.vscreens-dot-active {
+  background-color: rgba(255, 255, 255, 0.95);
+}
+
+.vscreens-heading {
+  font-weight: bold;
+  font-size: 0.9em;
+}
+
+.vscreens-preview-item {
+  padding: 2px 8px 10px 8px;
+}
+
+.vscreens-preview-row {
+  spacing: 8px;
+}
+
+.vscreens-thumb-button {
+  padding: 4px;
+  border-radius: 8px;
+  border: 2px solid transparent;
+}
+
+.vscreens-thumb-button:hover,
+.vscreens-thumb-button:focus {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.vscreens-thumb-current {
+  border: 2px solid rgba(120, 175, 255, 0.9);
+}
+
+.vscreens-thumb {
+  border-radius: 4px;
+  background-color: rgba(0, 0, 0, 0.5);
+}
+
+.vscreens-thumb-label {
+  padding-top: 3px;
+  font-size: 0.8em;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+/* Transient switcher shown on the monitor that changed space. */
+
+.vscreens-switcher {
+  spacing: 10px;
+  padding: 18px 22px;
+  border-radius: 20px;
+  background-color: rgba(0, 0, 0, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+.vscreens-switcher-label {
+  font-size: 1.1em;
+  font-weight: bold;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.vscreens-switcher-row {
+  spacing: 12px;
+}
+
+.vscreens-switcher-item {
+  padding: 4px;
+  border-radius: 10px;
+  border: 2px solid transparent;
+}
+
+.vscreens-switcher-item-selected {
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  background-color: rgba(255, 255, 255, 0.14);
+}
+
+.vscreens-switcher-number {
+  padding-top: 4px;
+  font-size: 0.85em;
+  color: rgba(255, 255, 255, 0.7);
+}
