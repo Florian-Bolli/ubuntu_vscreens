@@ -1,8 +1,16 @@
 # VScreens
 
-Independent virtual desktops per monitor on Ubuntu / GNOME, in the style of macOS Spaces.
+A **virtual screen manager for GNOME**: each physical monitor has its own spaces, switched on their own.
 
-GNOME only offers two native workspace modes: switch on the primary monitor only, or switch every monitor together. VScreens gives each screen its own set of spaces that you can add, remove, and switch without moving the other screens.
+GNOME normally does one of two things — only the primary display changes, or **every** display changes together. VScreens does neither. You switch the screen under the mouse; the other screens stay exactly where they are.
+
+![Switch popup on one monitor](screenshots/switch-popup.png)
+
+*The switch popup lives on the monitor you just changed. Live thumbnails, close with ×, settings via the gear.*
+
+<video src="screenshots/switch-one-monitor.webm" autoplay loop muted playsinline></video>
+
+*Switching spaces on one monitor. The other monitor does not move.*
 
 Tested on **Ubuntu 24.04** with **GNOME Shell 46** on **X11**.
 
@@ -40,12 +48,16 @@ It then creates extra hidden workspaces as parking spots for spaces that are not
 
 Shortcuts reuse GNOME’s existing workspace keys, but they now act on **one monitor only** — the screen under the mouse.
 
+**Switching.** Bind whatever you like to GNOME’s “Switch to workspace left/right” actions. Defaults include `Ctrl+Alt+Left` / `Right` and `Super+Page Up` / `Page Down`. Mouse side buttons work well for this: map Back/Forward to those same actions in GNOME Settings or a remapper (that is how the author switches).
+
+**Moving a window.** Hold **Shift** with the same switch shortcut. That is stock GNOME (`Move to workspace left/right`); VScreens just makes it apply to one monitor and follows the window there. So `Ctrl+Shift+Alt+Left` / `Right`, or `Super+Shift+Page Up` / `Down`. If you switch with mouse side buttons, bind Shift+those buttons to the move actions, or use the keyboard Shift combo.
+
 | Action | Default keys |
 | --- | --- |
 | Previous space on this screen | `Ctrl+Alt+Left`, `Super+Page Up`, `Super+Alt+Left` (stops at the first space) |
 | Next space on this screen | `Ctrl+Alt+Right`, `Super+Page Down`, `Super+Alt+Right` (creates a new space if you are already on the last one) |
 | Jump to space 1–9 | GNOME’s `switch-to-workspace-N` bindings (`Super+Home` is space 1 by default) |
-| Move focused window to the adjacent space and follow it | `Ctrl+Shift+Alt+Left` / `Right`, `Super+Shift+Page Up` / `Down` |
+| Move focused window and follow it | **Shift** + your switch shortcut |
 | Add a space on this screen | `Super+Alt+=` |
 | Remove the current space on this screen | `Super+Alt+-` |
 
@@ -53,41 +65,7 @@ When you switch, a popup on **that** screen shows live thumbnails of all of its 
 
 The top-right panel indicator shows one group of dots per monitor, left to right. Click it to open settings. Right-click it for the thumbnail overview of every screen.
 
-## Settings
 
-Open settings from the gear on the panel thumbnail menu, or:
-
-```bash
-gnome-extensions prefs vscreens@florian.local
-```
-
-All keys live under `org.gnome.shell.extensions.vscreens`. After a first install, read them with:
-
-```bash
-gsettings --schemadir ~/.local/share/gnome-shell/extensions/vscreens@florian.local/schemas list-recursively org.gnome.shell.extensions.vscreens
-```
-
-Useful ones:
-
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `thumbnail-size` | `360` | Preview width in pixels (160–600) |
-| `collapse-empty-spaces` | `true` | Collapse consecutive empty spaces to one |
-| `spaces-per-monitor` | `4` | How many spaces each monitor starts with (1–12). Switching past the last occupied space adds another. |
-| `animation-duration` | `250` | Slide duration in milliseconds; `0` disables the slide |
-| `active-monitor-mode` | `pointer` | `pointer` = screen under the mouse; `focus` = screen of the focused window |
-| `show-osd` | `true` | Show the thumbnail popup when switching |
-| `show-indicator` | `true` | Show the panel dots |
-| `hide-overview-thumbnails` | `true` | Hide GNOME’s stock workspace strip in Overview (it is meaningless in this model) |
-| `add-space` / `remove-space` | `Super+Alt+=` / `Super+Alt+-` | Add or remove a space on the current monitor |
-
-Example:
-
-```bash
-SCHEMA=~/.local/share/gnome-shell/extensions/vscreens@florian.local/schemas
-gsettings --schemadir "$SCHEMA" set org.gnome.shell.extensions.vscreens spaces-per-monitor 6
-gsettings --schemadir "$SCHEMA" set org.gnome.shell.extensions.vscreens animation-duration 180
-```
 
 ## Update
 
@@ -128,3 +106,14 @@ VScreens keeps every visible window on workspace 0 (the “stage”) and parks o
 ```
 
 The extension source is `vscreens@florian.local/`. After edits, reinstall and reload.
+
+## License
+
+[MIT](LICENSE). Use it however you like; keep the copyright notice so Florian Bolli is mentioned.
+
+## Contact
+
+Feel free to contact me — questions, ideas, or if something breaks.
+
+- GitHub: [Florian-Bolli](https://github.com/Florian-Bolli) · [open an issue](https://github.com/Florian-Bolli/ubuntu_vscreens/issues)
+- Email: [mail@florianbolli.ch](mailto:mail@florianbolli.ch)

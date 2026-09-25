@@ -144,24 +144,27 @@ class SpaceSwitcherPopup extends Clutter.Actor {
 
             const item = new St.BoxLayout({
                 vertical: true,
+                reactive: true,
+                track_hover: true,
                 style_class: selected
                     ? 'vscreens-switcher-item vscreens-switcher-item-selected'
                     : 'vscreens-switcher-item',
                 y_align: Clutter.ActorAlign.CENTER,
             });
 
+            const jumpTo = () => {
+                if (i !== this._spaceManager.currentSpace(this._monitorIndex)) {
+                    this._spaceManager.switchTo(this._monitorIndex, i,
+                        i >= spaceIndex ? 1 : -1);
+                }
+                this._dismiss();
+            };
+
             const thumb = createThumbnailWithClose(
                 this._spaceManager, this._monitorIndex, i,
                 selected ? this._selectedWidth() : this._normalWidth(), {
                     selected,
-                    onSelect: () => {
-                        this._spaceManager.switchTo(this._monitorIndex, i,
-                            i >= spaceIndex ? 1 : -1);
-                        const state = this._spaceManager.monitorStates
-                            .find(s => s.monitorIndex === this._monitorIndex);
-                        if (state)
-                            this.showSpace(state.current, state.nSpaces);
-                    },
+                    onSelect: jumpTo,
                     onRemove: () => {
                         if (!this._spaceManager.removeSpace(this._monitorIndex, i))
                             return;
@@ -173,11 +176,23 @@ class SpaceSwitcherPopup extends Clutter.Actor {
                 });
             item.add_child(thumb);
 
-            item.add_child(new St.Label({
-                text: `${i + 1}`,
+            const number = new St.Button({
                 style_class: 'vscreens-switcher-number',
-                x_align: Clutter.ActorAlign.CENTER,
-            }));
+                child: new St.Label({
+                    text: `${i + 1}`,
+                    x_align: Clutter.ActorAlign.CENTER,
+                }),
+            });
+            number.connect('clicked', jumpTo);
+            item.add_child(number);
+
+            item.connect('button-press-event', (_actor, event) => {
+                if (event.get_button() === 1) {
+                    jumpTo();
+                    return Clutter.EVENT_STOP;
+                }
+                return Clutter.EVENT_PROPAGATE;
+            });
 
             this._row.add_child(item);
         }
@@ -185,6 +200,11 @@ class SpaceSwitcherPopup extends Clutter.Actor {
 
     _clearContents() {
         this._row.destroy_all_children();
+    }
+
+    _dismiss() {
+        this._cancelHide();
+        this._fadeOut();
     }
 
     _fadeOut() {
