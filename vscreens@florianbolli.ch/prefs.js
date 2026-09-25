@@ -19,6 +19,10 @@ export default class VScreensPreferences extends ExtensionPreferences {
         appearance.add(this._switchRow(settings, 'show-osd',
             'Show switch popup',
             'Thumbnails appear on the monitor that just changed space.'));
+        appearance.add(this._sizeRow(settings, 'switcher-timeout',
+            'Time until thumbnails disappear',
+            'Milliseconds the thumbnail menu stays after switching a screen. Hovering keeps it open.',
+            0, 10000, 100));
         appearance.add(this._switchRow(settings, 'show-indicator',
             'Show panel indicator',
             'Dots in the top bar, one group per monitor.'));

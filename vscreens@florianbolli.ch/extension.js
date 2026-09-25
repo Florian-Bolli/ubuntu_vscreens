@@ -2,6 +2,8 @@ import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import {FitMode, WorkspacesView} from 'resource:///org/gnome/shell/ui/workspacesView.js';
+import {ThumbnailsBox} from 'resource:///org/gnome/shell/ui/workspaceThumbnail.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 import {SpaceManager} from './spaces.js';
@@ -51,6 +53,7 @@ export default class VScreensExtension extends Extension {
         this._monitorsChangedId = Main.layoutManager.connect('monitors-changed', () => {
             this._destroySwitchers();
             this._spaceManager.build();
+            this._syncOverviewPatch();
         });
 
         this._focusChangedId = global.display.connect(
@@ -223,41 +226,133 @@ export default class VScreensExtension extends Extension {
     // ---------------------------------------------------------------- overview
 
     /**
-     * The stock workspace thumbnails show the raw workspace list, which under
-     * this model is a stage plus a pile of parking spots -- meaningless to look
-     * at. Suppress the strip; the panel indicator reports space state instead.
+     * Parking workspaces are real Mutter workspaces. Overview rebuilds a
+     * thumbnail for each one on every open, which looks like empty screens.
+     * Do not create those thumbnails, and keep the app-grid fit on the stage.
      */
     _patchOverview() {
         this._controls = Main.overview?._overview?._controls ?? null;
-        if (!this._controls?._updateThumbnailsBox)
+        if (!this._controls)
             return;
 
-        this._originalUpdateThumbnailsBox = this._controls._updateThumbnailsBox;
+        if (this._controls._getFitModeForState) {
+            this._originalGetFitModeForState =
+                this._controls._getFitModeForState.bind(this._controls);
+        }
+
+        const thumbProto = ThumbnailsBox.prototype;
+        if (!this._originalUpdateShouldShow && thumbProto._updateShouldShow) {
+            this._originalUpdateShouldShow = thumbProto._updateShouldShow;
+            this._originalCreateThumbnails = thumbProto._createThumbnails;
+            this._originalDestroyThumbnails = thumbProto._destroyThumbnails;
+        }
+
+        const viewProto = WorkspacesView.prototype;
+        if (!this._originalUpdateVisibility && viewProto._updateVisibility) {
+            this._originalUpdateVisibility = viewProto._updateVisibility;
+        }
+
         this._syncOverviewPatch();
     }
 
     _syncOverviewPatch() {
-        if (!this._controls || !this._originalUpdateThumbnailsBox)
+        if (!this._controls)
             return;
 
-        if (this._settings.get_boolean('hide-overview-thumbnails')) {
-            const controls = this._controls;
-            controls._updateThumbnailsBox = function () {
-                this._thumbnailsBox.hide();
+        const hide = this._settings.get_boolean('hide-overview-thumbnails');
+        const thumbProto = ThumbnailsBox.prototype;
+        const viewProto = WorkspacesView.prototype;
+
+        if (hide) {
+            thumbProto._updateShouldShow = function () {
+                if (this._shouldShow === false)
+                    return;
+                this._shouldShow = false;
+                this.notify('should-show');
             };
-            controls._thumbnailsBox.hide();
+            thumbProto._createThumbnails = function () {
+                this._updateShouldShow();
+            };
+            if (this._originalUpdateVisibility) {
+                const orig = this._originalUpdateVisibility;
+                viewProto._updateVisibility = function () {
+                    orig.call(this);
+                    if (!this._workspaces)
+                        return;
+                    for (let i = 0; i < this._workspaces.length; i++)
+                        this._workspaces[i].visible = i === 0;
+                };
+            }
+            if (this._originalGetFitModeForState)
+                this._controls._getFitModeForState = () => FitMode.SINGLE;
         } else {
-            this._controls._updateThumbnailsBox = this._originalUpdateThumbnailsBox;
-            this._controls._updateThumbnailsBox(false);
+            this._restoreOverviewProtos();
+        }
+
+        this._forEachThumbnailsBox(box => {
+            if (hide) {
+                box._destroyThumbnails?.();
+                box._updateShouldShow?.();
+                box.hide();
+            } else {
+                box._updateShouldShow?.();
+                if (Main.overview.visible)
+                    box._createThumbnails?.();
+            }
+        });
+
+        this._controls._update?.();
+        this._refreshWorkspaceViews();
+    }
+
+    _forEachThumbnailsBox(fn) {
+        const boxes = [];
+        if (this._controls?._thumbnailsBox)
+            boxes.push(this._controls._thumbnailsBox);
+        for (const view of this._controls?._workspacesDisplay?._workspacesViews ?? []) {
+            if (view._thumbnails)
+                boxes.push(view._thumbnails);
+        }
+        for (const box of boxes)
+            fn(box);
+    }
+
+    _refreshWorkspaceViews() {
+        const views = this._controls?._workspacesDisplay?._workspacesViews ?? [];
+        for (const view of views) {
+            const inner = view._workspacesView ?? view;
+            inner._updateVisibility?.();
         }
     }
 
+    _restoreOverviewProtos() {
+        if (this._originalUpdateShouldShow)
+            ThumbnailsBox.prototype._updateShouldShow = this._originalUpdateShouldShow;
+        if (this._originalCreateThumbnails)
+            ThumbnailsBox.prototype._createThumbnails = this._originalCreateThumbnails;
+        if (this._originalDestroyThumbnails)
+            ThumbnailsBox.prototype._destroyThumbnails = this._originalDestroyThumbnails;
+        if (this._originalUpdateVisibility)
+            WorkspacesView.prototype._updateVisibility = this._originalUpdateVisibility;
+        if (this._controls && this._originalGetFitModeForState)
+            this._controls._getFitModeForState = this._originalGetFitModeForState;
+    }
+
     _unpatchOverview() {
-        if (this._controls && this._originalUpdateThumbnailsBox) {
-            this._controls._updateThumbnailsBox = this._originalUpdateThumbnailsBox;
-            this._controls._updateThumbnailsBox(false);
-        }
+        this._restoreOverviewProtos();
+        this._forEachThumbnailsBox(box => {
+            box._updateShouldShow?.();
+            if (Main.overview.visible)
+                box._createThumbnails?.();
+        });
+        this._controls?._update?.();
+        this._refreshWorkspaceViews();
+
         this._controls = null;
-        this._originalUpdateThumbnailsBox = null;
+        this._originalGetFitModeForState = null;
+        this._originalUpdateShouldShow = null;
+        this._originalCreateThumbnails = null;
+        this._originalDestroyThumbnails = null;
+        this._originalUpdateVisibility = null;
     }
 }

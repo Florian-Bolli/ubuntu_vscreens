@@ -53,6 +53,13 @@
       <description>Width in pixels of space previews in the panel menu and switch popup.</description>
     </key>
 
+    <key name="switcher-timeout" type="i">
+      <default>1400</default>
+      <range min="0" max="10000"/>
+      <summary>Time until the thumbnail menu disappears</summary>
+      <description>Milliseconds the thumbnail menu stays after switching a screen. Hovering the menu keeps it open. Set to 0 to hide it immediately.</description>
+    </key>
+
     <key name="add-space" type="as">
       <default><![CDATA[['<Super><Alt>equal']]]></default>
       <summary>Add a space to the current monitor</summary>

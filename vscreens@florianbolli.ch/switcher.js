@@ -8,7 +8,6 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import {createThumbnailWithClose} from './thumbnails.js';
 
-const HIDE_TIMEOUT = 1400;
 const FADE_TIME = 120;
 
 /**
@@ -118,8 +117,9 @@ class SpaceSwitcherPopup extends Clutter.Actor {
 
     _scheduleHide() {
         this._cancelHide();
+        const timeout = this._settings.get_int('switcher-timeout');
         this._hideTimeoutId = GLib.timeout_add(
-            GLib.PRIORITY_DEFAULT, HIDE_TIMEOUT, () => {
+            GLib.PRIORITY_DEFAULT, timeout, () => {
                 this._hideTimeoutId = 0;
                 this._fadeOut();
                 return GLib.SOURCE_REMOVE;
