@@ -6,13 +6,10 @@ import St from 'gi://St';
 import * as Layout from 'resource:///org/gnome/shell/ui/layout.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
-import {createSpaceThumbnail} from './thumbnails.js';
+import {createThumbnailWithClose} from './thumbnails.js';
 
 const HIDE_TIMEOUT = 1400;
 const FADE_TIME = 120;
-
-const WIDTH_NORMAL = 132;
-const WIDTH_SELECTED = 180;
 
 /**
  * Transient overlay showing every space on one monitor, with the current one
@@ -21,7 +18,7 @@ const WIDTH_SELECTED = 180;
  */
 export const SpaceSwitcherPopup = GObject.registerClass(
 class SpaceSwitcherPopup extends Clutter.Actor {
-    _init(monitorIndex, spaceManager) {
+    _init(monitorIndex, spaceManager, settings, openPrefs) {
         super._init({
             // BinLayout so the card honours its own centring inside the monitor.
             layout_manager: new Clutter.BinLayout(),
@@ -31,7 +28,8 @@ class SpaceSwitcherPopup extends Clutter.Actor {
 
         this._monitorIndex = monitorIndex;
         this._spaceManager = spaceManager;
-        this._backgroundManagers = [];
+        this._settings = settings;
+        this._openPrefs = openPrefs;
         this._hideTimeoutId = 0;
 
         this.add_constraint(new Layout.MonitorConstraint({index: monitorIndex}));
@@ -39,6 +37,7 @@ class SpaceSwitcherPopup extends Clutter.Actor {
         this._card = new St.BoxLayout({
             vertical: true,
             style_class: 'vscreens-switcher',
+            reactive: true,
             x_expand: true,
             y_expand: true,
             x_align: Clutter.ActorAlign.CENTER,
@@ -46,11 +45,39 @@ class SpaceSwitcherPopup extends Clutter.Actor {
         });
         this.add_child(this._card);
 
+        // Keep the popup up while the pointer is on it, so the close buttons
+        // are actually reachable instead of racing the fade-out.
+        this._card.connect('enter-event', () => this._cancelHide());
+        this._card.connect('leave-event', () => this._scheduleHide());
+
+        this._header = new St.BoxLayout({
+            style_class: 'vscreens-switcher-header',
+            x_expand: true,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._card.add_child(this._header);
+
         this._label = new St.Label({
             style_class: 'vscreens-switcher-label',
+            x_expand: true,
             x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.CENTER,
         });
-        this._card.add_child(this._label);
+        this._header.add_child(this._label);
+
+        const gear = new St.Button({
+            style_class: 'vscreens-settings-button',
+            can_focus: true,
+            child: new St.Icon({
+                icon_name: 'preferences-system-symbolic',
+                icon_size: 20,
+            }),
+        });
+        gear.connect('clicked', () => {
+            this._cancelHide();
+            this._openPrefs?.();
+        });
+        this._header.add_child(gear);
 
         this._row = new St.BoxLayout({
             style_class: 'vscreens-switcher-row',
@@ -69,11 +96,6 @@ class SpaceSwitcherPopup extends Clutter.Actor {
     showSpace(spaceIndex, nSpaces) {
         this._rebuild(spaceIndex, nSpaces);
 
-        if (this._hideTimeoutId) {
-            GLib.source_remove(this._hideTimeoutId);
-            this._hideTimeoutId = 0;
-        }
-
         if (!this.visible) {
             this.visible = true;
             this.opacity = 0;
@@ -84,12 +106,32 @@ class SpaceSwitcherPopup extends Clutter.Actor {
             });
         }
 
+        this._scheduleHide();
+    }
+
+    _cancelHide() {
+        if (this._hideTimeoutId) {
+            GLib.source_remove(this._hideTimeoutId);
+            this._hideTimeoutId = 0;
+        }
+    }
+
+    _scheduleHide() {
+        this._cancelHide();
         this._hideTimeoutId = GLib.timeout_add(
             GLib.PRIORITY_DEFAULT, HIDE_TIMEOUT, () => {
                 this._hideTimeoutId = 0;
                 this._fadeOut();
                 return GLib.SOURCE_REMOVE;
             });
+    }
+
+    _normalWidth() {
+        return this._settings.get_int('thumbnail-size');
+    }
+
+    _selectedWidth() {
+        return Math.round(this._normalWidth() * 1.22);
     }
 
     _rebuild(spaceIndex, nSpaces) {
@@ -108,12 +150,28 @@ class SpaceSwitcherPopup extends Clutter.Actor {
                 y_align: Clutter.ActorAlign.CENTER,
             });
 
-            const thumb = createSpaceThumbnail(
+            const thumb = createThumbnailWithClose(
                 this._spaceManager, this._monitorIndex, i,
-                selected ? WIDTH_SELECTED : WIDTH_NORMAL,
-                this._backgroundManagers);
-            if (thumb)
-                item.add_child(thumb);
+                selected ? this._selectedWidth() : this._normalWidth(), {
+                    selected,
+                    onSelect: () => {
+                        this._spaceManager.switchTo(this._monitorIndex, i,
+                            i >= spaceIndex ? 1 : -1);
+                        const state = this._spaceManager.monitorStates
+                            .find(s => s.monitorIndex === this._monitorIndex);
+                        if (state)
+                            this.showSpace(state.current, state.nSpaces);
+                    },
+                    onRemove: () => {
+                        if (!this._spaceManager.removeSpace(this._monitorIndex, i))
+                            return;
+                        const state = this._spaceManager.monitorStates
+                            .find(s => s.monitorIndex === this._monitorIndex);
+                        if (state)
+                            this.showSpace(state.current, state.nSpaces);
+                    },
+                });
+            item.add_child(thumb);
 
             item.add_child(new St.Label({
                 text: `${i + 1}`,
@@ -126,9 +184,6 @@ class SpaceSwitcherPopup extends Clutter.Actor {
     }
 
     _clearContents() {
-        for (const manager of this._backgroundManagers)
-            manager.destroy();
-        this._backgroundManagers = [];
         this._row.destroy_all_children();
     }
 
@@ -139,8 +194,8 @@ class SpaceSwitcherPopup extends Clutter.Actor {
             mode: Clutter.AnimationMode.EASE_OUT_QUAD,
             onComplete: () => {
                 this.visible = false;
-                // Drop the wallpapers and clones while hidden; they are rebuilt
-                // on the next switch anyway and the content would be stale.
+                // Drop the clones while hidden; they are rebuilt on the next
+                // switch anyway and the content would be stale.
                 this._clearContents();
             },
         });

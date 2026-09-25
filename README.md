@@ -42,18 +42,24 @@ Shortcuts reuse GNOME’s existing workspace keys, but they now act on **one mon
 
 | Action | Default keys |
 | --- | --- |
-| Previous space on this screen | `Ctrl+Alt+Left`, `Super+Page Up`, `Super+Alt+Left` |
-| Next space on this screen | `Ctrl+Alt+Right`, `Super+Page Down`, `Super+Alt+Right` |
+| Previous space on this screen | `Ctrl+Alt+Left`, `Super+Page Up`, `Super+Alt+Left` (stops at the first space) |
+| Next space on this screen | `Ctrl+Alt+Right`, `Super+Page Down`, `Super+Alt+Right` (creates a new space if you are already on the last one) |
 | Jump to space 1–9 | GNOME’s `switch-to-workspace-N` bindings (`Super+Home` is space 1 by default) |
 | Move focused window to the adjacent space and follow it | `Ctrl+Shift+Alt+Left` / `Right`, `Super+Shift+Page Up` / `Down` |
 | Add a space on this screen | `Super+Alt+=` |
 | Remove the current space on this screen | `Super+Alt+-` |
 
-When you switch, a popup on **that** screen shows live thumbnails of all of its spaces. The current one is larger and outlined. It fades after about 1.4 seconds.
+When you switch, a popup on **that** screen shows live thumbnails of all of its spaces. The current one is larger and outlined. Hover to keep it open, then click a thumbnail to jump or the **×** to remove that space. Windows on a removed space move onto a neighbour so nothing is lost. The last space on a monitor cannot be removed.
 
-The top-right panel indicator shows one group of dots per monitor, left to right. Click it for a preview of every space on every screen; click a thumbnail to jump there.
+The top-right panel indicator shows one group of dots per monitor, left to right. Click it to open settings. Right-click it for the thumbnail overview of every screen.
 
 ## Settings
+
+Open settings from the gear on the panel thumbnail menu, or:
+
+```bash
+gnome-extensions prefs vscreens@florian.local
+```
 
 All keys live under `org.gnome.shell.extensions.vscreens`. After a first install, read them with:
 
@@ -65,7 +71,9 @@ Useful ones:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `spaces-per-monitor` | `4` | How many spaces each monitor starts with (1–12) |
+| `thumbnail-size` | `360` | Preview width in pixels (160–600) |
+| `collapse-empty-spaces` | `true` | Collapse consecutive empty spaces to one |
+| `spaces-per-monitor` | `4` | How many spaces each monitor starts with (1–12). Switching past the last occupied space adds another. |
 | `animation-duration` | `250` | Slide duration in milliseconds; `0` disables the slide |
 | `active-monitor-mode` | `pointer` | `pointer` = screen under the mouse; `focus` = screen of the focused window |
 | `show-osd` | `true` | Show the thumbnail popup when switching |

@@ -5,8 +5,8 @@
     <key name="spaces-per-monitor" type="i">
       <default>4</default>
       <range min="1" max="12"/>
-      <summary>Spaces per monitor</summary>
-      <description>How many virtual desktops each monitor starts with.</description>
+      <summary>Starting spaces per monitor</summary>
+      <description>How many virtual desktops each monitor starts with. Switching past the last space creates another, up to 12.</description>
     </key>
 
     <key name="animation-duration" type="i">
@@ -38,6 +38,19 @@
       <default>true</default>
       <summary>Show an on-screen indicator when switching</summary>
       <description>Briefly show the new space number on the monitor that switched.</description>
+    </key>
+
+    <key name="collapse-empty-spaces" type="b">
+      <default>true</default>
+      <summary>Collapse consecutive empty spaces</summary>
+      <description>When several empty spaces sit next to each other on a monitor, keep only one.</description>
+    </key>
+
+    <key name="thumbnail-size" type="i">
+      <default>360</default>
+      <range min="160" max="600"/>
+      <summary>Thumbnail width</summary>
+      <description>Width in pixels of space previews in the panel menu and switch popup.</description>
     </key>
 
     <key name="add-space" type="as">

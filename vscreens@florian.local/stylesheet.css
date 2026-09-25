@@ -36,12 +36,34 @@
   font-size: 0.9em;
 }
 
+.vscreens-settings-item {
+  padding: 4px 8px;
+}
+
+.vscreens-settings-button {
+  padding: 6px;
+  border-radius: 12px;
+}
+
+.vscreens-settings-button:hover,
+.vscreens-settings-button:focus {
+  background-color: rgba(255, 255, 255, 0.12);
+}
+
+.vscreens-settings-icon {
+  icon-size: 16px;
+}
+
 .vscreens-preview-item {
   padding: 2px 8px 10px 8px;
 }
 
 .vscreens-preview-row {
   spacing: 8px;
+}
+
+.vscreens-thumb-wrap {
+  padding: 0;
 }
 
 .vscreens-thumb-button {
@@ -61,7 +83,24 @@
 
 .vscreens-thumb {
   border-radius: 4px;
-  background-color: rgba(0, 0, 0, 0.5);
+  background-color: #1a1a1a;
+}
+
+.vscreens-thumb-close {
+  min-width: 32px;
+  min-height: 32px;
+  margin: 5px;
+  padding: 0 8px;
+  border-radius: 16px;
+  background-color: rgba(0, 0, 0, 0.72);
+  color: #ffffff;
+  font-weight: bold;
+  font-size: 18px;
+}
+
+.vscreens-thumb-close:hover,
+.vscreens-thumb-close:focus {
+  background-color: rgba(196, 48, 48, 0.95);
 }
 
 .vscreens-thumb-label {
@@ -79,6 +118,11 @@
   background-color: rgba(0, 0, 0, 0.8);
   border: 1px solid rgba(255, 255, 255, 0.12);
   color: #ffffff;
+}
+
+.vscreens-switcher-header {
+  spacing: 8px;
+  min-width: 200px;
 }
 
 .vscreens-switcher-label {

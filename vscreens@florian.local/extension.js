@@ -7,6 +7,7 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {SpaceManager} from './spaces.js';
 import {SpaceIndicator} from './indicator.js';
 import {SpaceSwitcherPopup} from './switcher.js';
+import {clearWallpaperCache} from './thumbnails.js';
 
 const SWITCH_MODE = Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW;
 
@@ -62,6 +63,11 @@ export default class VScreensExtension extends Extension {
                 this._syncIndicatorVisibility();
             else if (key === 'hide-overview-thumbnails')
                 this._syncOverviewPatch();
+            else if (key === 'collapse-empty-spaces' &&
+                     this._settings.get_boolean('collapse-empty-spaces'))
+                this._spaceManager.compactNow();
+            else if (key === 'thumbnail-size')
+                this._indicator?.sync();
         });
     }
 
@@ -98,13 +104,15 @@ export default class VScreensExtension extends Extension {
         this._spaceManager?.teardown();
         this._spaceManager = null;
 
+        clearWallpaperCache();
         this._settings = null;
     }
 
     // ---------------------------------------------------------------- indicator
 
     _addIndicator() {
-        this._indicator = new SpaceIndicator(this._spaceManager);
+        this._indicator = new SpaceIndicator(
+            this._spaceManager, this._settings, () => this.openPreferences());
         Main.panel.addToStatusArea(this.uuid, this._indicator, 0, 'right');
         this._syncIndicatorVisibility();
     }
@@ -141,7 +149,9 @@ export default class VScreensExtension extends Extension {
 
         let popup = this._switchers.get(monitorIndex);
         if (!popup) {
-            popup = new SpaceSwitcherPopup(monitorIndex, this._spaceManager);
+            popup = new SpaceSwitcherPopup(
+                monitorIndex, this._spaceManager, this._settings,
+                () => this.openPreferences());
             this._switchers.set(monitorIndex, popup);
         }
         popup.showSpace(state.current, state.nSpaces);

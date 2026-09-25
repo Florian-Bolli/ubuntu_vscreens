@@ -6,9 +6,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
-import {createSpaceThumbnail} from './thumbnails.js';
-
-const THUMB_WIDTH = 150;
+import {createThumbnailWithClose} from './thumbnails.js';
 
 /**
  * One row of dots per monitor, laid out left to right in the same order as the
@@ -17,11 +15,12 @@ const THUMB_WIDTH = 150;
  */
 export const SpaceIndicator = GObject.registerClass(
 class SpaceIndicator extends PanelMenu.Button {
-    _init(spaceManager) {
+    _init(spaceManager, settings, openPrefs) {
         super._init(0.0, 'VScreens');
 
         this._spaceManager = spaceManager;
-        this._backgroundManagers = [];
+        this._settings = settings;
+        this._openPrefs = openPrefs;
 
         this._box = new St.BoxLayout({
             style_class: 'vscreens-indicator',
@@ -32,8 +31,8 @@ class SpaceIndicator extends PanelMenu.Button {
         this._previews = new PopupMenu.PopupMenuSection();
         this.menu.addMenuItem(this._previews);
 
-        // Previews clone live window actors and pull in wallpapers, so build them
-        // on demand and tear them down on close rather than holding them open.
+        // Previews clone live window actors, so build them on demand and tear
+        // them down on close rather than holding them open.
         // Re-syncing on open also refreshes the dots, so the active-monitor
         // highlight is accurate at the moment you actually look at it.
         this.menu.connect('open-state-changed', (_menu, isOpen) => {
@@ -44,6 +43,24 @@ class SpaceIndicator extends PanelMenu.Button {
         });
 
         this.sync();
+    }
+
+    /**
+     * Left-click / tap opens settings. Right-click still opens the preview
+     * menu, so the thumbnail overview is not gone, just off the primary click.
+     */
+    vfunc_event(event) {
+        const type = event.type();
+        const isPrimary =
+            type === Clutter.EventType.TOUCH_BEGIN ||
+            (type === Clutter.EventType.BUTTON_PRESS && event.get_button() === 1);
+
+        if (isPrimary) {
+            this._openPrefs?.();
+            return Clutter.EVENT_PROPAGATE;
+        }
+
+        return super.vfunc_event(event);
     }
 
     sync() {
@@ -86,14 +103,12 @@ class SpaceIndicator extends PanelMenu.Button {
     // ----------------------------------------------------------------- previews
 
     _clearPreviews() {
-        for (const manager of this._backgroundManagers)
-            manager.destroy();
-        this._backgroundManagers = [];
         this._previews.removeAll();
     }
 
     _buildPreviews() {
         this._clearPreviews();
+        this._addSettingsHeader();
 
         for (const state of this._spaceManager.monitorStates) {
             const monitor = Main.layoutManager.monitors[state.monitorIndex];
@@ -114,10 +129,25 @@ class SpaceIndicator extends PanelMenu.Button {
             row.add_child(rowBox);
 
             for (let i = 0; i < state.nSpaces; i++)
-                rowBox.add_child(this._makeThumbnail(state, monitor, i));
+                rowBox.add_child(this._makeThumbnail(state, i));
 
             this._previews.addMenuItem(row);
         }
+    }
+
+    _addSettingsHeader() {
+        const item = new PopupMenu.PopupImageMenuItem(
+            'Settings', 'preferences-system-symbolic');
+        item.connect('activate', () => {
+            this.menu.close();
+            this._openPrefs?.();
+        });
+        this._previews.addMenuItem(item);
+        this._previews.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+    }
+
+    _thumbWidth() {
+        return this._settings.get_int('thumbnail-size');
     }
 
     _monitorLabel(monitorIndex) {
@@ -130,35 +160,30 @@ class SpaceIndicator extends PanelMenu.Button {
     }
 
     /** A clickable preview of one space, which jumps that screen to it. */
-    _makeThumbnail(state, monitor, spaceIndex) {
-        const button = new St.Button({
-            style_class: spaceIndex === state.current
-                ? 'vscreens-thumb-button vscreens-thumb-current'
-                : 'vscreens-thumb-button',
-            can_focus: true,
-        });
+    _makeThumbnail(state, spaceIndex) {
+        const column = new St.BoxLayout({vertical: true});
 
-        const wrapper = new St.BoxLayout({vertical: true});
-        button.set_child(wrapper);
-
-        const thumb = createSpaceThumbnail(
+        const thumb = createThumbnailWithClose(
             this._spaceManager, state.monitorIndex, spaceIndex,
-            THUMB_WIDTH, this._backgroundManagers);
-        if (thumb)
-            wrapper.add_child(thumb);
-        wrapper.add_child(new St.Label({
+            this._thumbWidth(), {
+                selected: spaceIndex === state.current,
+                onSelect: () => {
+                    this.menu.close();
+                    this._spaceManager.switchTo(state.monitorIndex, spaceIndex,
+                        spaceIndex >= state.current ? 1 : -1);
+                },
+                onRemove: () => {
+                    this._spaceManager.removeSpace(state.monitorIndex, spaceIndex);
+                },
+            });
+        column.add_child(thumb);
+        column.add_child(new St.Label({
             text: `${spaceIndex + 1}`,
             style_class: 'vscreens-thumb-label',
             x_align: Clutter.ActorAlign.CENTER,
         }));
 
-        button.connect('clicked', () => {
-            this.menu.close();
-            this._spaceManager.switchTo(state.monitorIndex, spaceIndex,
-                spaceIndex >= state.current ? 1 : -1);
-        });
-
-        return button;
+        return column;
     }
 
     _onDestroy() {

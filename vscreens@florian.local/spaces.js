@@ -1,5 +1,6 @@
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -12,6 +13,7 @@ import {MonitorGroup} from 'resource:///org/gnome/shell/ui/workspaceAnimation.js
 // workspace it sits on rather than tracked separately -- which means windows the
 // user drags between monitors join the right space for free.
 const STAGE = 0;
+const MAX_SPACES = 12;
 
 /** Per-monitor state: which spaces exist, which one is on screen. */
 class MonitorSpaces {
@@ -37,8 +39,16 @@ export class SpaceManager {
         // Set while we move windows or force the active workspace back to STAGE,
         // so our own bookkeeping does not look like the user navigating away.
         this._internal = false;
+        this._compacting = false;
+        this._compactId = 0;
+        this._displaySignals = [];
 
         this._onChanged = null;
+
+        this._displaySignals.push(
+            global.display.connect('window-created', () => this._scheduleCompact()),
+            global.display.connect('window-left-monitor', () => this._scheduleCompact()),
+            global.display.connect('window-entered-monitor', () => this._scheduleCompact()));
     }
 
     /** Called whenever the space layout changes, so the UI can resync. */
@@ -66,6 +76,7 @@ export class SpaceManager {
 
         this._ensureWorkspaces(this._requiredWorkspaceCount());
         this._gatherStrayWindows();
+        this._compactAllMonitors();
         this._notify();
     }
 
@@ -89,6 +100,14 @@ export class SpaceManager {
     }
 
     teardown() {
+        if (this._compactId) {
+            GLib.source_remove(this._compactId);
+            this._compactId = 0;
+        }
+        for (const id of this._displaySignals)
+            global.display.disconnect(id);
+        this._displaySignals = [];
+
         this._gatherStrayWindows();
         this._monitors.clear();
     }
@@ -192,12 +211,25 @@ export class SpaceManager {
 
     switchRelative(monitorIndex, delta) {
         const state = this._monitors.get(monitorIndex);
-        if (!state || state.nSpaces < 2)
+        if (!state || delta === 0)
             return;
 
-        const n = state.nSpaces;
-        const target = ((state.current + delta) % n + n) % n;
-        this.switchTo(monitorIndex, target, delta >= 0 ? 1 : -1);
+        // Grow instead of wrapping: next past the last space creates a new one,
+        // unless that last space is already empty — then another empty would
+        // just be collapsed again.
+        // Previous from the first space stays put.
+        if (delta > 0 && state.current === state.nSpaces - 1) {
+            if (this._collapsesEmpty() && this._isSpaceEmpty(monitorIndex, state.current))
+                return;
+            const added = this.addSpace(monitorIndex);
+            if (added !== null)
+                this.switchTo(monitorIndex, added, 1);
+            return;
+        }
+        if (delta < 0 && state.current === 0)
+            return;
+
+        this.switchTo(monitorIndex, state.current + delta, delta > 0 ? 1 : -1);
     }
 
     switchTo(monitorIndex, spaceIndex, direction = 1) {
@@ -238,6 +270,7 @@ export class SpaceManager {
 
         state.current = spaceIndex;
         this._animateSlide(monitor, outgoingParkWs, direction);
+        this._compactEmptySpaces(monitorIndex);
         this._notify();
     }
 
@@ -328,13 +361,20 @@ export class SpaceManager {
 
         const monitorIndex = window.get_monitor();
         const state = this._monitors.get(monitorIndex);
-        if (!state || state.nSpaces < 2)
+        if (!state || delta === 0)
             return null;
 
-        const n = state.nSpaces;
-        const target = ((state.current + delta) % n + n) % n;
-        if (target === state.current)
+        let target = state.current + delta;
+        if (delta > 0 && state.current === state.nSpaces - 1) {
+            if (this._collapsesEmpty() && this._isSpaceEmpty(monitorIndex, state.current))
+                return null;
+            const added = this.addSpace(monitorIndex);
+            if (added === null)
+                return null;
+            target = added;
+        } else if (target < 0 || target >= state.nSpaces) {
             return null;
+        }
 
         if (follow) {
             // The window is on STAGE and stays there, so switching the monitor
@@ -361,6 +401,7 @@ export class SpaceManager {
             }
         }
 
+        this._compactEmptySpaces(monitorIndex);
         this._notify();
         return monitorIndex;
     }
@@ -379,7 +420,7 @@ export class SpaceManager {
 
     addSpace(monitorIndex) {
         const state = this._monitors.get(monitorIndex);
-        if (!state)
+        if (!state || state.nSpaces >= MAX_SPACES)
             return null;
 
         state.parkWs.push(this._allocateParkWs());
@@ -388,33 +429,155 @@ export class SpaceManager {
         return state.nSpaces - 1;
     }
 
-    /**
-     * Drop the space currently on screen, moving its windows to the neighbour so
-     * nothing is lost. Refuses to remove the last remaining space.
-     */
     removeCurrentSpace(monitorIndex) {
+        const state = this._monitors.get(monitorIndex);
+        if (!state)
+            return false;
+        return this.removeSpace(monitorIndex, state.current);
+    }
+
+    /**
+     * Drop a space, moving its windows onto a neighbour so nothing is lost.
+     * Refuses to remove the last remaining space.
+     */
+    removeSpace(monitorIndex, spaceIndex) {
+        if (!this._dropSpace(monitorIndex, spaceIndex))
+            return false;
+        if (!this._compacting) {
+            this._compactEmptySpaces(monitorIndex);
+            this._notify();
+        }
+        return true;
+    }
+
+    _dropSpace(monitorIndex, spaceIndex) {
         const state = this._monitors.get(monitorIndex);
         if (!state || state.nSpaces < 2)
             return false;
+        if (spaceIndex < 0 || spaceIndex >= state.nSpaces)
+            return false;
 
-        const removed = state.current;
-        const neighbour = removed === 0 ? 1 : removed - 1;
-
-        // The windows on screen stay on screen and the neighbour's join them, so
-        // there is nothing to slide -- the two spaces simply become one.
         this._internal = true;
         try {
-            this._unparkWindows(state.parkWs[neighbour]);
+            if (spaceIndex === state.current) {
+                // Windows already on screen stay; the neighbour joins them.
+                const neighbour = spaceIndex === 0 ? 1 : spaceIndex - 1;
+                this._unparkWindows(state.parkWs[neighbour]);
+            } else {
+                // A parked space's windows land on whatever is currently visible.
+                this._unparkWindows(state.parkWs[spaceIndex]);
+            }
         } finally {
             this._internal = false;
         }
 
-        state.parkWs.splice(removed, 1);
-        state.current = removed === 0 ? 0 : removed - 1;
+        state.parkWs.splice(spaceIndex, 1);
+        if (spaceIndex === state.current)
+            state.current = spaceIndex === 0 ? 0 : spaceIndex - 1;
+        else if (spaceIndex < state.current)
+            state.current--;
 
         this._ensureWorkspaces(this._requiredWorkspaceCount());
-        this._notify();
         return true;
+    }
+
+    _isSpaceEmpty(monitorIndex, spaceIndex) {
+        const state = this._monitors.get(monitorIndex);
+        if (!state || spaceIndex < 0 || spaceIndex >= state.nSpaces)
+            return true;
+
+        const isCurrent = spaceIndex === state.current;
+        const targetWs = isCurrent ? STAGE : state.parkWs[spaceIndex];
+
+        // Minimized windows still occupy a space, so do not use the preview
+        // filter that drops anything not currently showing.
+        return !this._movableWindows().some(window => {
+            const ws = window.get_workspace();
+            if (!ws || ws.index() !== targetWs)
+                return false;
+            return isCurrent ? window.get_monitor() === monitorIndex : true;
+        });
+    }
+
+    /**
+     * Consecutive empty spaces collapse to a single empty one. If you are
+     * standing in that run, that is the one we keep.
+     */
+    _collapsesEmpty() {
+        return this._settings.get_boolean('collapse-empty-spaces');
+    }
+
+    _compactEmptySpaces(monitorIndex) {
+        if (!this._collapsesEmpty())
+            return;
+
+        const state = this._monitors.get(monitorIndex);
+        if (!state || state.nSpaces < 2 || this._compacting)
+            return;
+
+        const empty = [];
+        for (let i = 0; i < state.nSpaces; i++)
+            empty.push(this._isSpaceEmpty(monitorIndex, i));
+
+        const toRemove = [];
+        let runStart = -1;
+        for (let i = 0; i <= empty.length; i++) {
+            const inRun = i < empty.length && empty[i];
+            if (inRun && runStart < 0)
+                runStart = i;
+            if (!inRun && runStart >= 0) {
+                const runEnd = i - 1;
+                let keep = runStart;
+                if (state.current >= runStart && state.current <= runEnd)
+                    keep = state.current;
+                for (let k = runStart; k <= runEnd; k++) {
+                    if (k !== keep)
+                        toRemove.push(k);
+                }
+                runStart = -1;
+            }
+        }
+
+        if (toRemove.length === 0)
+            return;
+
+        this._compacting = true;
+        try {
+            toRemove.sort((a, b) => b - a);
+            for (const index of toRemove)
+                this._dropSpace(monitorIndex, index);
+        } finally {
+            this._compacting = false;
+        }
+    }
+
+    compactNow() {
+        this._compactAllMonitors();
+        this._notify();
+    }
+
+    _compactAllMonitors() {
+        for (const state of this._monitors.values())
+            this._compactEmptySpaces(state.monitorIndex);
+    }
+
+    _scheduleCompact() {
+        if (this._internal || this._compacting || this._monitors.size === 0)
+            return;
+        if (this._compactId)
+            return;
+
+        this._compactId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._compactId = 0;
+            if (this._internal)
+                return GLib.SOURCE_REMOVE;
+            const before = [...this._monitors.values()].map(s => s.nSpaces);
+            this._compactAllMonitors();
+            const after = [...this._monitors.values()].map(s => s.nSpaces);
+            if (before.some((n, i) => n !== after[i]))
+                this._notify();
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _usedParkWs() {
