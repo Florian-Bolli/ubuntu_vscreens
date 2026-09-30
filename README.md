@@ -14,7 +14,7 @@ GNOME normally does one of two things: only the primary display changes, or **ev
 
 *Switching spaces on one monitor. The other monitor does not move.*
 
-Tested on **Ubuntu 24.04** with **GNOME Shell 46** on **X11** and **Wayland**. Works with two or more monitors; a single screen still gets addable/removable spaces.
+Supports **Ubuntu 24.04** (GNOME Shell 46) and **Ubuntu 26.04** (GNOME Shell 50), on **X11** and **Wayland**. Works with two or more monitors; a single screen still gets addable/removable spaces.
 
 ## Requirements
 

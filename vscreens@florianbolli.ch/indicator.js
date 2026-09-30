@@ -21,6 +21,27 @@ class SpaceIndicator extends PanelMenu.Button {
         this._spaceManager = spaceManager;
         this._settings = settings;
         this._openPrefs = openPrefs;
+        this._destroyed = false;
+
+        // Shell 49+ opens the menu from a click gesture. St.Widget no longer
+        // implements vfunc_event, so the old super.vfunc_event() path throws
+        // on every motion over the button. Own both buttons instead.
+        this._clickGesture?.set_enabled(false);
+        if (Clutter.ClickGesture) {
+            const primary = new Clutter.ClickGesture({
+                required_button: Clutter.BUTTON_PRIMARY,
+                recognize_on_press: true,
+            });
+            primary.connect('recognize', () => this._openPrefs?.());
+            this.add_action(primary);
+
+            const secondary = new Clutter.ClickGesture({
+                required_button: Clutter.BUTTON_SECONDARY,
+                recognize_on_press: true,
+            });
+            secondary.connect('recognize', () => this.menu?.toggle());
+            this.add_action(secondary);
+        }
 
         this._box = new St.BoxLayout({
             style_class: 'vscreens-indicator',
@@ -50,20 +71,30 @@ class SpaceIndicator extends PanelMenu.Button {
      * menu, so the thumbnail overview is not gone, just off the primary click.
      */
     vfunc_event(event) {
+        // Shell 50 still calls this, but St.Widget does not implement it.
+        if (Clutter.ClickGesture)
+            return Clutter.EVENT_PROPAGATE;
+
         const type = event.type();
         const isPrimary =
             type === Clutter.EventType.TOUCH_BEGIN ||
             (type === Clutter.EventType.BUTTON_PRESS && event.get_button() === 1);
-
         if (isPrimary) {
             this._openPrefs?.();
-            return Clutter.EVENT_PROPAGATE;
+            return Clutter.EVENT_STOP;
         }
-
-        return super.vfunc_event(event);
+        if (type === Clutter.EventType.BUTTON_PRESS &&
+            event.get_button() === Clutter.BUTTON_SECONDARY) {
+            this.menu?.toggle();
+            return Clutter.EVENT_STOP;
+        }
+        return Clutter.EVENT_PROPAGATE;
     }
 
     sync() {
+        if (this._destroyed)
+            return;
+
         this._box.destroy_all_children();
 
         const states = this._spaceManager.monitorStates;
@@ -187,6 +218,7 @@ class SpaceIndicator extends PanelMenu.Button {
     }
 
     _onDestroy() {
+        this._destroyed = true;
         this._clearPreviews();
         super._onDestroy();
     }

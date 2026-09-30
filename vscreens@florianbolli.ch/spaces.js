@@ -15,6 +15,24 @@ import {MonitorGroup} from 'resource:///org/gnome/shell/ui/workspaceAnimation.js
 const STAGE = 0;
 const MAX_SPACES = 12;
 
+// Mutter 48 dropped Meta.disable_unredirect_for_display(). Shell 50 exposes
+// the same switch on the compositor instead.
+function setUnredirectSuppressed(suppressed) {
+    const compositor = global.compositor;
+    if (suppressed) {
+        if (compositor?.disable_unredirect)
+            compositor.disable_unredirect();
+        else
+            Meta.disable_unredirect_for_display?.(global.display);
+        return;
+    }
+
+    if (compositor?.enable_unredirect)
+        compositor.enable_unredirect();
+    else
+        Meta.enable_unredirect_for_display?.(global.display);
+}
+
 /** Per-monitor state: which spaces exist, which one is on screen. */
 class MonitorSpaces {
     constructor(monitorIndex) {
@@ -48,6 +66,8 @@ export class SpaceManager {
         this._internal = false;
         this._compacting = false;
         this._compactId = 0;
+        this._workspaceFixId = 0;
+        this._activatingStage = false;
         this._displaySignals = [];
 
         this._onChanged = null;
@@ -118,6 +138,10 @@ export class SpaceManager {
      */
     pause() {
         this._paused = true;
+        if (this._workspaceFixId) {
+            GLib.source_remove(this._workspaceFixId);
+            this._workspaceFixId = 0;
+        }
         this._cancelAllSlides();
         this._fullscreenHomes.clear();
         this._gatherStrayWindows();
@@ -130,6 +154,10 @@ export class SpaceManager {
         if (this._compactId) {
             GLib.source_remove(this._compactId);
             this._compactId = 0;
+        }
+        if (this._workspaceFixId) {
+            GLib.source_remove(this._workspaceFixId);
+            this._workspaceFixId = 0;
         }
         for (const id of this._displaySignals)
             global.display.disconnect(id);
@@ -373,14 +401,21 @@ export class SpaceManager {
             return;
         }
 
-        Main.uiGroup.insert_child_above(group, global.window_group);
-        group.progress = group.getWorkspaceProgress(fromWs);
-
         const monitorIndex = monitor.index;
         const token = {};
-        this._slides.set(monitorIndex, {group, token});
-        this._animating.add(monitorIndex);
-        Meta.disable_unredirect_for_display(global.display);
+        try {
+            Main.uiGroup.insert_child_above(group, global.window_group);
+            group.progress = group.getWorkspaceProgress(fromWs);
+            this._slides.set(monitorIndex, {group, token});
+            this._animating.add(monitorIndex);
+            setUnredirectSuppressed(true);
+        } catch (e) {
+            this._slides.delete(monitorIndex);
+            this._animating.delete(monitorIndex);
+            group.destroy();
+            logError(e, 'VScreens: could not start the slide overlay');
+            return;
+        }
 
         const finish = () => {
             const current = this._slides.get(monitorIndex);
@@ -389,7 +424,7 @@ export class SpaceManager {
             this._slides.delete(monitorIndex);
             this._animating.delete(monitorIndex);
             if (this._animating.size === 0)
-                Meta.enable_unredirect_for_display(global.display);
+                setUnredirectSuppressed(false);
             group.destroy();
         };
 
@@ -487,7 +522,7 @@ export class SpaceManager {
         slide.group.remove_all_transitions();
         slide.group.destroy();
         if (this._animating.size === 0)
-            Meta.enable_unredirect_for_display(global.display);
+            setUnredirectSuppressed(false);
     }
 
     _cancelAllSlides() {
@@ -907,7 +942,22 @@ export class SpaceManager {
      * belongs to, and put the active workspace back on STAGE.
      */
     handleActiveWorkspaceChanged() {
-        if (this._internal)
+        if (this._internal || this._workspaceFixId)
+            return;
+
+        // Activating STAGE from inside this signal re-enters the shell's
+        // workspace-view scroll, which activates another workspace, which
+        // calls us again, until the stack overflows. Wait until that handler
+        // has returned, then put the stage back.
+        this._workspaceFixId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._workspaceFixId = 0;
+            this._correctActiveWorkspace();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _correctActiveWorkspace() {
+        if (this._internal || this._paused)
             return;
 
         const index = global.workspace_manager.get_active_workspace_index();
@@ -919,12 +969,11 @@ export class SpaceManager {
             if (spaceIndex < 0)
                 continue;
 
-            this._activateStage();
             if (spaceIndex !== state.current) {
                 const direction = spaceIndex > state.current ? 1 : -1;
                 this.switchTo(monitorIndex, spaceIndex, direction);
             }
-            return;
+            break;
         }
 
         this._activateStage();
@@ -932,14 +981,16 @@ export class SpaceManager {
 
     _activateStage() {
         const stage = global.workspace_manager.get_workspace_by_index(STAGE);
-        if (!stage || stage.active)
+        if (!stage || stage.active || this._activatingStage)
             return;
 
         const wasInternal = this._internal;
+        this._activatingStage = true;
         this._internal = true;
         try {
             stage.activate(global.get_current_time());
         } finally {
+            this._activatingStage = false;
             this._internal = wasInternal;
         }
     }
