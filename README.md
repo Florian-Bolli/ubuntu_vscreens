@@ -57,7 +57,7 @@ Shortcuts reuse GNOME’s existing workspace keys, but they now act on **one mon
 
 **The thumbnail menu.** `Ctrl+Up` opens it without switching. It also appears when you switch. How long it stays is the “Time until thumbnails disappear” setting. Hovering keeps it open.
 
-**Moving a window.** Hold **Shift** with the same switch shortcut. That is stock GNOME (`Move to workspace left/right`); VScreens just makes it apply to one monitor and follows the window there. So `Ctrl+Shift+Alt+Left` / `Right`, or `Super+Shift+Page Up` / `Down`. If you switch with mouse side buttons, bind Shift+those buttons to the move actions, or use the keyboard Shift combo.
+**Moving a window.** Hold **Shift** with the shortcut from settings. `Ctrl+Right` switches; `Ctrl+Shift+Right` moves the focused window onto that space and follows it. GNOME’s own move-window keys do the same on one monitor: `Ctrl+Shift+Alt+Left` / `Right`, or `Super+Shift+Page Up` / `Down`.
 
 | Action | Default keys |
 | --- | --- |

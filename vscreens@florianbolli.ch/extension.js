@@ -30,6 +30,18 @@ const HIJACKED_MOVE = {
 
 const N_DIRECT_SHORTCUTS = 9;
 
+// `<Control>Right` becomes `<Control><Shift>Right`. Bindings that already
+// include Shift are left alone.
+function withShift(accelerator) {
+    if (!accelerator || /<shift>/i.test(accelerator))
+        return null;
+
+    const mods = accelerator.match(/^(?:<[^>]+>)+/);
+    if (!mods)
+        return `<Shift>${accelerator}`;
+    return `${mods[0]}<Shift>${accelerator.slice(mods[0].length)}`;
+}
+
 export default class VScreensExtension extends Extension {
     enable() {
         this._settings = this.getSettings();
@@ -39,6 +51,11 @@ export default class VScreensExtension extends Extension {
         this._switchers = new Map();
         this._running = false;
         this._swipeDx = 0;
+        this._shiftMoves = new Map();
+        this._shiftAccelId = global.display.connect(
+            'accelerator-activated', (_display, action) => {
+                this._onShiftAccelerator(action);
+            });
 
         this._spaceManager.setChangedCallback(() => this._indicator?.sync());
 
@@ -123,6 +140,11 @@ export default class VScreensExtension extends Extension {
 
         this._unbindKeys();
         this._unpatchOverview();
+
+        if (this._shiftAccelId) {
+            global.display.disconnect(this._shiftAccelId);
+            this._shiftAccelId = 0;
+        }
 
         this._destroySwitchers();
 
@@ -294,6 +316,8 @@ export default class VScreensExtension extends Extension {
 
         this._addOwnKeybinding('switch-previous', () => this._switch(-1));
         this._addOwnKeybinding('switch-next', () => this._switch(1));
+        this._grabShiftedMove('switch-previous', -1);
+        this._grabShiftedMove('switch-next', 1);
         this._addOwnKeybinding('show-switcher', () => {
             this._showSwitcher(this._spaceManager.activeMonitor());
         });
@@ -318,6 +342,47 @@ export default class VScreensExtension extends Extension {
         this._hijacked.push(name);
     }
 
+    /**
+     * The shortcut from settings, plus Shift, moves the focused window and
+     * follows it. Ctrl+Right switches; Ctrl+Shift+Right moves.
+     */
+    _grabShiftedMove(key, delta) {
+        for (const accelerator of this._settings.get_strv(key)) {
+            const shifted = withShift(accelerator);
+            if (!shifted)
+                continue;
+
+            const action = global.display.grab_accelerator(
+                shifted, Meta.KeyBindingFlags.NONE);
+            if (action === Meta.KeyBindingAction.NONE) {
+                log(`VScreens: could not grab ${shifted} for moving a window`);
+                continue;
+            }
+
+            const name = Meta.external_binding_name_for_action(action);
+            Main.wm.allowKeybinding(name, SWITCH_MODE);
+            this._shiftMoves.set(action, delta);
+        }
+    }
+
+    _onShiftAccelerator(action) {
+        if (!this._running)
+            return;
+        const delta = this._shiftMoves.get(action);
+        if (delta === undefined)
+            return;
+
+        const monitorIndex = this._spaceManager.moveFocusedWindow(delta);
+        if (monitorIndex !== null)
+            this._showSwitcher(monitorIndex);
+    }
+
+    _releaseShiftedMoves() {
+        for (const action of this._shiftMoves.keys())
+            global.display.ungrab_accelerator(action);
+        this._shiftMoves.clear();
+    }
+
     _addOwnKeybinding(name, handler) {
         Main.wm.addKeybinding(name, this._settings,
             Meta.KeyBindingFlags.NONE, SWITCH_MODE, handler);
@@ -338,6 +403,7 @@ export default class VScreensExtension extends Extension {
         for (const name of this._ownKeybindings ?? [])
             Main.wm.removeKeybinding(name);
         this._ownKeybindings = [];
+        this._releaseShiftedMoves();
     }
 
     // ---------------------------------------------------------------- overview

@@ -25,10 +25,10 @@ export default class VScreensPreferences extends ExtensionPreferences {
         });
         shortcuts.add(this._shortcutRow(settings, 'switch-previous',
             'Previous space',
-            'Default is Ctrl+Left.'));
+            'Default is Ctrl+Left. Hold Shift to move the focused window there.'));
         shortcuts.add(this._shortcutRow(settings, 'switch-next',
             'Next space',
-            'Default is Ctrl+Right.'));
+            'Default is Ctrl+Right. Hold Shift to move the focused window there.'));
         shortcuts.add(this._shortcutRow(settings, 'show-switcher',
             'Show thumbnail menu',
             'Opens the menu without switching. Default is Ctrl+Up.'));
