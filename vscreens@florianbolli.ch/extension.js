@@ -1,5 +1,6 @@
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
+import Clutter from 'gi://Clutter';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {FitMode, WorkspacesView} from 'resource:///org/gnome/shell/ui/workspacesView.js';
@@ -36,21 +37,23 @@ export default class VScreensExtension extends Extension {
         this._hijacked = [];
         this._ownKeybindings = [];
         this._switchers = new Map();
+        this._running = false;
+        this._swipeDx = 0;
 
-        this._spaceManager.build();
         this._spaceManager.setChangedCallback(() => this._indicator?.sync());
-
-        this._addIndicator();
-        this._bindKeys();
-        this._patchOverview();
 
         this._workspaceChangedId = global.workspace_manager.connect(
             'active-workspace-changed',
-            () => this._spaceManager.handleActiveWorkspaceChanged());
+            () => {
+                if (this._running)
+                    this._spaceManager.handleActiveWorkspaceChanged();
+            });
 
         // A monitor being plugged or unplugged invalidates every monitor index,
         // so rebuild from scratch rather than trying to migrate the old layout.
         this._monitorsChangedId = Main.layoutManager.connect('monitors-changed', () => {
+            if (!this._running)
+                return;
             this._destroySwitchers();
             this._spaceManager.build();
             this._syncOverviewPatch();
@@ -59,8 +62,18 @@ export default class VScreensExtension extends Extension {
         this._focusChangedId = global.display.connect(
             'notify::focus-window', () => this._indicator?.sync());
 
+        this._swipeId = global.stage.connect('captured-event', (_actor, event) => {
+            if (!this._running)
+                return Clutter.EVENT_PROPAGATE;
+            return this._handleSwipe(event);
+        });
+
         this._settingsChangedId = this._settings.connect('changed', (_s, key) => {
-            if (key === 'spaces-per-monitor')
+            if (key === 'enabled')
+                this._syncRunning();
+            else if (!this._running)
+                return;
+            else if (key === 'spaces-per-monitor')
                 this._spaceManager.build();
             else if (key === 'show-indicator')
                 this._syncIndicatorVisibility();
@@ -71,7 +84,15 @@ export default class VScreensExtension extends Extension {
                 this._spaceManager.compactNow();
             else if (key === 'thumbnail-size')
                 this._indicator?.sync();
+            else if (key === 'switch-previous' || key === 'switch-next' ||
+                     key === 'show-switcher' || key === 'add-space' ||
+                     key === 'remove-space') {
+                this._unbindKeys();
+                this._bindKeys();
+            }
         });
+
+        this._syncRunning();
     }
 
     disable() {
@@ -94,6 +115,12 @@ export default class VScreensExtension extends Extension {
             this._settingsChangedId = null;
         }
 
+        if (this._swipeId) {
+            global.stage.disconnect(this._swipeId);
+            this._swipeId = 0;
+        }
+        this._releaseWorkspaceSwipe();
+
         this._unbindKeys();
         this._unpatchOverview();
 
@@ -109,6 +136,89 @@ export default class VScreensExtension extends Extension {
 
         clearWallpaperCache();
         this._settings = null;
+    }
+
+    _syncRunning() {
+        const enabled = this._settings.get_boolean('enabled');
+        if (enabled && !this._running)
+            this._start();
+        else if (!enabled && this._running)
+            this._stop();
+    }
+
+    _start() {
+        this._running = true;
+        this._claimWorkspaceSwipe();
+        this._spaceManager.build();
+        this._addIndicator();
+        this._bindKeys();
+        this._patchOverview();
+    }
+
+    _stop() {
+        this._running = false;
+        this._releaseWorkspaceSwipe();
+        this._unbindKeys();
+        this._unpatchOverview();
+        this._destroySwitchers();
+        this._indicator?.destroy();
+        this._indicator = null;
+        this._spaceManager.pause();
+    }
+
+    /**
+     * Three-finger horizontal swipes switch the monitor under the pointer.
+     * GNOME's own swipe moves every monitor, so that tracker is held off
+     * while VScreens is running.
+     */
+    _claimWorkspaceSwipe() {
+        const tracker = Main.wm._workspaceAnimation?._swipeTracker;
+        if (!tracker || this._swipeClaimed)
+            return;
+        this._swipeWasEnabled = tracker.enabled;
+        tracker.enabled = false;
+        this._swipeClaimed = true;
+    }
+
+    _releaseWorkspaceSwipe() {
+        const tracker = Main.wm._workspaceAnimation?._swipeTracker;
+        if (tracker && this._swipeClaimed)
+            tracker.enabled = this._swipeWasEnabled;
+        this._swipeClaimed = false;
+    }
+
+    _handleSwipe(event) {
+        if (event.type() !== Clutter.EventType.TOUCHPAD_SWIPE)
+            return Clutter.EVENT_PROPAGATE;
+        if (event.get_touchpad_gesture_finger_count?.() !== 3)
+            return Clutter.EVENT_PROPAGATE;
+
+        const phase = event.get_gesture_phase?.();
+        const Phase = Clutter.TouchpadGesturePhase;
+        if (!Phase || phase === undefined)
+            return Clutter.EVENT_PROPAGATE;
+
+        if (phase === Phase.BEGIN) {
+            this._swipeDx = 0;
+            return Clutter.EVENT_STOP;
+        }
+
+        if (phase === Phase.UPDATE) {
+            const delta = event.get_gesture_motion_delta?.();
+            const dx = Array.isArray(delta) ? delta[0] : 0;
+            this._swipeDx += dx;
+            return Clutter.EVENT_STOP;
+        }
+
+        if (phase === Phase.END || phase === Phase.CANCEL) {
+            const dx = this._swipeDx;
+            this._swipeDx = 0;
+            if (phase === Phase.END && Math.abs(dx) > 80)
+                this._switch(dx < 0 ? 1 : -1);
+            return Clutter.EVENT_STOP;
+        }
+
+        return Clutter.EVENT_PROPAGATE;
     }
 
     // ---------------------------------------------------------------- indicator
@@ -158,6 +268,7 @@ export default class VScreensExtension extends Extension {
             this._switchers.set(monitorIndex, popup);
         }
         popup.showSpace(state.current, state.nSpaces);
+        popup.get_parent()?.set_child_above_sibling(popup, null);
     }
 
     _destroySwitchers() {
@@ -180,6 +291,12 @@ export default class VScreensExtension extends Extension {
 
         for (let i = 1; i <= N_DIRECT_SHORTCUTS; i++)
             this._hijack(`switch-to-workspace-${i}`, () => this._switchToIndex(i - 1));
+
+        this._addOwnKeybinding('switch-previous', () => this._switch(-1));
+        this._addOwnKeybinding('switch-next', () => this._switch(1));
+        this._addOwnKeybinding('show-switcher', () => {
+            this._showSwitcher(this._spaceManager.activeMonitor());
+        });
 
         this._addOwnKeybinding('add-space', () => {
             const monitorIndex = this._spaceManager.activeMonitor();

@@ -18,12 +18,14 @@ Tested on **Ubuntu 24.04** with **GNOME Shell 46** on **X11** and **Wayland**. W
 
 ## Requirements
 
-- GNOME Shell 46
+- GNOME Shell 46 through 50 (Ubuntu 24.04 through 26.04)
 - A multi-monitor setup (it works with one screen, but the point is per-monitor spaces)
 
 ## Install
 
-The GNOME Extensions website listing is not up yet. Until then, install from git:
+**From the GNOME Extensions website.** Install [VScreens](https://extensions.gnome.org/extension/11058/vscreens/) there, or search for it in GNOME’s **Extensions** app. That is the usual way.
+
+**From GitHub**, if you want the git version instead:
 
 ```bash
 git clone https://github.com/Florian-Bolli/ubuntu_vscreens.git
@@ -33,21 +35,12 @@ cd ubuntu_vscreens
 
 `install.sh` copies the extension to `~/.local/share/gnome-shell/extensions/vscreens@florianbolli.ch/` and enables it.
 
+You can also download `vscreens@florianbolli.ch.shell-extension.zip` from the latest [Actions](https://github.com/Florian-Bolli/ubuntu_vscreens/actions/workflows/pack.yml) run on `main`, then install it with `gnome-extensions install --force` or GNOME’s **Extensions** app → **Install from File…**. To build that zip yourself: `./pack.sh`.
+
 Then reload GNOME Shell:
 
 - **X11:** `Alt+F2`, type `r`, press Enter
 - **Wayland:** log out and log back in
-
-**From a zip** (the same bundle that will go on the store). Download `vscreens@florianbolli.ch.shell-extension.zip` from the latest [Actions](https://github.com/Florian-Bolli/ubuntu_vscreens/actions/workflows/pack.yml) run on `main`, then:
-
-```bash
-gnome-extensions install --force vscreens@florianbolli.ch.shell-extension.zip
-gnome-extensions enable vscreens@florianbolli.ch
-```
-
-Or GNOME’s **Extensions** app → menu → **Install from File…**. Then reload as above. To build the zip yourself: `./pack.sh`.
-
-**From the GNOME Extensions website** — not listed yet. After review, this will be the usual install.
 
 The extension also flips two GNOME settings it needs to work:
 
@@ -60,14 +53,17 @@ It then creates extra hidden workspaces as parking spots for spaces that are not
 
 Shortcuts reuse GNOME’s existing workspace keys, but they now act on **one monitor only** — the screen under the mouse.
 
-**Switching.** Bind whatever you like to GNOME’s “Switch to workspace left/right” actions. Defaults include `Ctrl+Alt+Left` / `Right` and `Super+Page Up` / `Page Down`. Mouse side buttons work well for this: map Back/Forward to those same actions in GNOME Settings or a remapper (that is how the author switches).
+**Switching.** `Ctrl+Left` and `Ctrl+Right` move one space on the monitor under the mouse. The same actions are also bound to GNOME’s “Switch to workspace left/right” keys, so `Ctrl+Alt+Left` / `Right` and `Super+Page Up` / `Page Down` keep working. Change any of these from the gear menu: click the shortcut, then press the new keys. A three-finger horizontal swipe on a touchpad does the same switch.
+
+**The thumbnail menu.** `Ctrl+Up` opens it without switching. It also appears when you switch. How long it stays is the “Time until thumbnails disappear” setting. Hovering keeps it open.
 
 **Moving a window.** Hold **Shift** with the same switch shortcut. That is stock GNOME (`Move to workspace left/right`); VScreens just makes it apply to one monitor and follows the window there. So `Ctrl+Shift+Alt+Left` / `Right`, or `Super+Shift+Page Up` / `Down`. If you switch with mouse side buttons, bind Shift+those buttons to the move actions, or use the keyboard Shift combo.
 
 | Action | Default keys |
 | --- | --- |
-| Previous space on this screen | `Ctrl+Alt+Left`, `Super+Page Up`, `Super+Alt+Left` (stops at the first space) |
-| Next space on this screen | `Ctrl+Alt+Right`, `Super+Page Down`, `Super+Alt+Right` (creates a new space if you are already on the last one) |
+| Previous space on this screen | `Ctrl+Left`. GNOME’s workspace-left keys still work too (`Ctrl+Alt+Left`, `Super+Page Up`) |
+| Next space on this screen | `Ctrl+Right`. GNOME’s workspace-right keys still work too (`Ctrl+Alt+Right`, `Super+Page Down`) |
+| Show the thumbnail menu | `Ctrl+Up` |
 | Jump to space 1–9 | GNOME’s `switch-to-workspace-N` bindings (`Super+Home` is space 1 by default) |
 | Move focused window and follow it | **Shift** + your switch shortcut |
 | Add a space on this screen | `Super+Alt+=` |
@@ -77,9 +73,15 @@ When you switch, a popup on **that** screen shows live thumbnails of all of its 
 
 The top-right panel indicator shows one group of dots per monitor, left to right. Click it to open settings. Right-click it for the thumbnail overview of every screen.
 
+**Turn it off** with **Enable VScreens** in that settings window. The extension stays installed, and GNOME’s own workspace switching comes back. Uninstall only if you want it gone.
+
 
 
 ## Update
+
+If you installed from the GNOME Extensions website, update there, or in the **Extensions** app.
+
+If you installed from GitHub:
 
 ```bash
 cd ubuntu_vscreens
@@ -87,7 +89,7 @@ git pull
 ./install.sh
 ```
 
-Reload the shell again (`Alt+F2` → `r` on X11, or log out on Wayland). When the store listing is live, you can update there instead.
+Reload the shell again (`Alt+F2` → `r` on X11, or log out on Wayland).
 
 ## Uninstall
 

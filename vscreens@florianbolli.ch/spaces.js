@@ -36,6 +36,13 @@ export class SpaceManager {
 
         this._monitors = new Map();
         this._animating = new Set();
+        this._slides = new Map();
+        this._windowSignals = new Map();
+        // Window -> {monitorIndex, parkWs} for the space it left to go fullscreen.
+        this._fullscreenHomes = new Map();
+        this._placing = false;
+        this._paused = false;
+        this._desktopSaved = false;
         // Set while we move windows or force the active workspace back to STAGE,
         // so our own bookkeeping does not look like the user navigating away.
         this._internal = false;
@@ -46,9 +53,14 @@ export class SpaceManager {
         this._onChanged = null;
 
         this._displaySignals.push(
-            global.display.connect('window-created', () => this._scheduleCompact()),
+            global.display.connect('window-created', (_d, window) => {
+                this._trackWindow(window);
+                this._scheduleCompact();
+            }),
             global.display.connect('window-left-monitor', () => this._scheduleCompact()),
             global.display.connect('window-entered-monitor', () => this._scheduleCompact()));
+        for (const actor of global.get_window_actors())
+            this._trackWindow(actor.meta_window);
     }
 
     /** Called whenever the space layout changes, so the UI can resync. */
@@ -63,6 +75,7 @@ export class SpaceManager {
     // ---------------------------------------------------------------- lifecycle
 
     build() {
+        this._paused = false;
         const nSpaces = this._settings.get_int('spaces-per-monitor');
         this._monitors.clear();
 
@@ -91,12 +104,26 @@ export class SpaceManager {
             for (const window of this._movableWindows()) {
                 const ws = window.get_workspace();
                 if (ws && ws.index() !== STAGE)
-                    window.change_workspace_by_index(STAGE, false);
+                    this._placeOnWorkspace(window, STAGE);
             }
             this._activateStage();
         } finally {
             this._internal = false;
         }
+    }
+
+    /**
+     * Hand the desktop back to GNOME without unloading the extension, so the
+     * preferences switch can turn VScreens off.
+     */
+    pause() {
+        this._paused = true;
+        this._cancelAllSlides();
+        this._fullscreenHomes.clear();
+        this._gatherStrayWindows();
+        this._monitors.clear();
+        this._restoreDesktopSettings();
+        this._notify();
     }
 
     teardown() {
@@ -107,19 +134,38 @@ export class SpaceManager {
         for (const id of this._displaySignals)
             global.display.disconnect(id);
         this._displaySignals = [];
+        this._untrackAllWindows();
 
+        this._cancelAllSlides();
+        this._fullscreenHomes.clear();
         this._gatherStrayWindows();
         this._monitors.clear();
+        this._restoreDesktopSettings();
     }
 
     /** We need one workspace for the stage plus one parking spot per space. */
     _ensureWorkspaces(count) {
+        if (!this._desktopSaved) {
+            this._savedDynamic = this._mutterPrefs.get_boolean('dynamic-workspaces');
+            this._savedPrimary = this._mutterPrefs.get_boolean('workspaces-only-on-primary');
+            this._savedWorkspaces = this._wmPrefs.get_int('num-workspaces');
+            this._desktopSaved = true;
+        }
         if (this._mutterPrefs.get_boolean('dynamic-workspaces'))
             this._mutterPrefs.set_boolean('dynamic-workspaces', false);
         if (this._mutterPrefs.get_boolean('workspaces-only-on-primary'))
             this._mutterPrefs.set_boolean('workspaces-only-on-primary', false);
         if (this._wmPrefs.get_int('num-workspaces') !== count)
             this._wmPrefs.set_int('num-workspaces', count);
+    }
+
+    _restoreDesktopSettings() {
+        if (!this._desktopSaved)
+            return;
+        this._mutterPrefs.set_boolean('dynamic-workspaces', this._savedDynamic);
+        this._mutterPrefs.set_boolean('workspaces-only-on-primary', this._savedPrimary);
+        this._wmPrefs.set_int('num-workspaces', this._savedWorkspaces);
+        this._desktopSaved = false;
     }
 
     // -------------------------------------------------------------- inspection
@@ -238,10 +284,12 @@ export class SpaceManager {
             return;
         if (spaceIndex < 0 || spaceIndex >= state.nSpaces)
             return;
-        // Ignore input while this monitor is mid-slide; the overlay owns the
-        // screen until it is torn down.
-        if (this._animating.has(monitorIndex))
-            return;
+        // A click or another shortcut during the slide used to be dropped, so
+        // the menu closed and the space never changed. Cancel the overlay and
+        // apply this switch immediately. Rapid repeats skip the new slide.
+        const interrupted = this._animating.has(monitorIndex);
+        if (interrupted)
+            this._cancelSlide(monitorIndex);
 
         const monitor = Main.layoutManager.monitors[monitorIndex];
         if (!monitor)
@@ -269,7 +317,8 @@ export class SpaceManager {
         }
 
         state.current = spaceIndex;
-        this._animateSlide(monitor, outgoingParkWs, direction);
+        if (!interrupted)
+            this._animateSlide(monitor, outgoingParkWs, direction);
         this._compactEmptySpaces(monitorIndex);
         this._notify();
     }
@@ -281,7 +330,7 @@ export class SpaceManager {
                 continue;
             const ws = window.get_workspace();
             if (ws && ws.index() === STAGE)
-                window.change_workspace_by_index(parkWs, false);
+                this._placeOnWorkspace(window, parkWs);
         }
     }
 
@@ -290,7 +339,7 @@ export class SpaceManager {
         for (const window of this._movableWindows()) {
             const ws = window.get_workspace();
             if (ws && ws.index() === parkWs)
-                window.change_workspace_by_index(STAGE, false);
+                this._placeOnWorkspace(window, STAGE);
         }
     }
 
@@ -328,14 +377,19 @@ export class SpaceManager {
         group.progress = group.getWorkspaceProgress(fromWs);
 
         const monitorIndex = monitor.index;
+        const token = {};
+        this._slides.set(monitorIndex, {group, token});
         this._animating.add(monitorIndex);
         Meta.disable_unredirect_for_display(global.display);
 
         const finish = () => {
-            if (!this._animating.has(monitorIndex))
+            const current = this._slides.get(monitorIndex);
+            if (!current || current.token !== token)
                 return;
+            this._slides.delete(monitorIndex);
             this._animating.delete(monitorIndex);
-            Meta.enable_unredirect_for_display(global.display);
+            if (this._animating.size === 0)
+                Meta.enable_unredirect_for_display(global.display);
             group.destroy();
         };
 
@@ -376,6 +430,14 @@ export class SpaceManager {
             return null;
         }
 
+        // A fullscreen or maximized window should not land on top of whatever
+        // already lives on the destination. Give it an empty space instead.
+        if (this._wantsOwnSpace(window) && !this._isSpaceEmpty(monitorIndex, target)) {
+            const added = this.addSpace(monitorIndex);
+            if (added !== null)
+                target = added;
+        }
+
         if (follow) {
             // The window is on STAGE and stays there, so switching the monitor
             // carries it along -- but only if we exclude it from the parking
@@ -395,7 +457,7 @@ export class SpaceManager {
         } else {
             this._internal = true;
             try {
-                window.change_workspace_by_index(state.parkWs[target], false);
+                this._placeOnWorkspace(window, state.parkWs[target]);
             } finally {
                 this._internal = false;
             }
@@ -412,21 +474,248 @@ export class SpaceManager {
                 continue;
             const ws = window.get_workspace();
             if (ws && ws.index() === STAGE)
-                window.change_workspace_by_index(parkWs, false);
+                this._placeOnWorkspace(window, parkWs);
         }
+    }
+
+    _cancelSlide(monitorIndex) {
+        const slide = this._slides.get(monitorIndex);
+        if (!slide)
+            return;
+        this._slides.delete(monitorIndex);
+        this._animating.delete(monitorIndex);
+        slide.group.remove_all_transitions();
+        slide.group.destroy();
+        if (this._animating.size === 0)
+            Meta.enable_unredirect_for_display(global.display);
+    }
+
+    _cancelAllSlides() {
+        for (const monitorIndex of [...this._slides.keys()])
+            this._cancelSlide(monitorIndex);
+    }
+
+    /**
+     * Dragging a window to a screen edge tiles it without always setting the
+     * maximize flags. Moving it to another workspace then drops that rectangle.
+     * Snapshot the frame and put it back, including a moment later, because
+     * Mutter reapplies the tile after the workspace change returns.
+     */
+    _placeOnWorkspace(window, index) {
+        const monitor = window.get_monitor();
+        const frame = window.get_frame_rect();
+        const snapshot = {
+            x: frame.x,
+            y: frame.y,
+            width: frame.width,
+            height: frame.height,
+        };
+        const coversScreen = window.fullscreen ||
+            (window.maximized_horizontally && window.maximized_vertically);
+
+        window.change_workspace_by_index(index, false);
+        if (coversScreen)
+            return;
+
+        const restore = () => this._restoreFrame(window, monitor, snapshot);
+        restore();
+        GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            restore();
+            return GLib.SOURCE_REMOVE;
+        });
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 150, () => {
+            restore();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _restoreFrame(window, monitor, snapshot) {
+        if (!window.get_compositor_private?.())
+            return;
+        this._placing = true;
+        try {
+            if (monitor >= 0 && window.get_monitor() !== monitor)
+                window.move_to_monitor(monitor);
+            const now = window.get_frame_rect();
+            if (now.x === snapshot.x && now.y === snapshot.y &&
+                now.width === snapshot.width && now.height === snapshot.height)
+                return;
+            window.move_resize_frame(
+                true, snapshot.x, snapshot.y, snapshot.width, snapshot.height);
+        } finally {
+            this._placing = false;
+        }
+    }
+
+    _wantsOwnSpace(window) {
+        if (window.fullscreen)
+            return this._settings.get_boolean('isolate-fullscreen');
+        if (window.maximized_horizontally && window.maximized_vertically)
+            return this._settings.get_boolean('isolate-maximized');
+        return false;
+    }
+
+    _trackWindow(window) {
+        if (!window || this._windowSignals.has(window))
+            return;
+        const ids = [
+            window.connect('notify::fullscreen', () => {
+                if (window.fullscreen)
+                    this._isolateWindow(window);
+                else
+                    this._restoreFromFullscreen(window);
+            }),
+            window.connect('notify::maximized-horizontally', () => this._onMaximizeChanged(window)),
+            window.connect('notify::maximized-vertically', () => this._onMaximizeChanged(window)),
+        ];
+        const unmanagedId = window.connect('unmanaged', () => this._untrackWindow(window));
+        ids.push(unmanagedId);
+        this._windowSignals.set(window, ids);
+    }
+
+    _untrackWindow(window) {
+        const ids = this._windowSignals.get(window);
+        if (!ids)
+            return;
+        this._windowSignals.delete(window);
+        this._fullscreenHomes.delete(window);
+        for (const id of ids) {
+            try {
+                window.disconnect(id);
+            } catch (e) {
+                // The window may already be gone.
+            }
+        }
+    }
+
+    _untrackAllWindows() {
+        for (const window of [...this._windowSignals.keys()])
+            this._untrackWindow(window);
+    }
+
+    _onMaximizeChanged(window) {
+        if (!window || window.fullscreen)
+            return;
+        if (window.maximized_horizontally && window.maximized_vertically)
+            this._isolateWindow(window);
+        else
+            this._fullscreenHomes.delete(window);
+    }
+
+    /**
+     * When a window becomes fullscreen or maximized on a space that already
+     * has other windows, move the others aside and leave it on its own space.
+     * The new space is inserted immediately to the right of the active one.
+     */
+    _isolateWindow(window) {
+        if (this._internal || this._placing || this._paused || !window || !this._wantsOwnSpace(window))
+            return;
+        if (this._fullscreenHomes.has(window))
+            return;
+
+        const monitorIndex = window.get_monitor();
+        const state = this._monitors.get(monitorIndex);
+        if (!state)
+            return;
+        if (this._isSpaceEmpty(monitorIndex, state.current))
+            return;
+
+        const others = this._movableWindows().some(other => {
+            if (other === window || other.get_monitor() !== monitorIndex)
+                return false;
+            const ws = other.get_workspace();
+            return ws && ws.index() === STAGE;
+        });
+        if (!others)
+            return;
+
+        const origin = state.current;
+        const originPark = state.parkWs[origin];
+        const added = this._insertSpace(monitorIndex, origin + 1);
+        if (added === null)
+            return;
+
+        this._fullscreenHomes.set(window, {monitorIndex, parkWs: originPark});
+
+        this._internal = true;
+        try {
+            this._parkMonitorWindowsExcept(
+                monitorIndex, state.parkWs[origin], window);
+        } finally {
+            this._internal = false;
+        }
+        state.current = added;
+        this._notify();
+    }
+
+    /**
+     * Fullscreen ended. Send the window back to the space it left, switch
+     * there, and drop the temporary space if nothing else is using it.
+     */
+    _restoreFromFullscreen(window) {
+        const saved = this._fullscreenHomes.get(window);
+        this._fullscreenHomes.delete(window);
+        if (!saved || this._internal || this._paused || !window)
+            return;
+
+        const monitorIndex = saved.monitorIndex;
+        const state = this._monitors.get(monitorIndex);
+        if (!state)
+            return;
+        const originIndex = state.parkWs.indexOf(saved.parkWs);
+        if (originIndex < 0)
+            return;
+
+        const ws = window.get_workspace();
+        let fromIndex = state.current;
+        if (ws && ws.index() !== STAGE) {
+            const parked = state.parkWs.indexOf(ws.index());
+            if (parked >= 0)
+                fromIndex = parked;
+        }
+        if (fromIndex === originIndex)
+            return;
+
+        const fromPark = state.parkWs[fromIndex];
+        this._internal = true;
+        try {
+            const destination = originIndex === state.current ? STAGE : saved.parkWs;
+            this._placeOnWorkspace(window, destination);
+        } finally {
+            this._internal = false;
+        }
+
+        if (state.current !== originIndex)
+            this.switchTo(monitorIndex, originIndex, originIndex > state.current ? 1 : -1);
+
+        const leftover = state.parkWs.indexOf(fromPark);
+        if (leftover >= 0 && leftover !== state.current &&
+            this._isSpaceEmpty(monitorIndex, leftover))
+            this.removeSpace(monitorIndex, leftover);
     }
 
     // ------------------------------------------------------- adding / removing
 
     addSpace(monitorIndex) {
         const state = this._monitors.get(monitorIndex);
+        if (!state)
+            return null;
+        return this._insertSpace(monitorIndex, state.nSpaces);
+    }
+
+    /** Insert a space at an index. Indices at or after it shift right. */
+    _insertSpace(monitorIndex, atIndex) {
+        const state = this._monitors.get(monitorIndex);
         if (!state || state.nSpaces >= MAX_SPACES)
             return null;
 
-        state.parkWs.push(this._allocateParkWs());
+        const index = Math.max(0, Math.min(atIndex, state.nSpaces));
+        state.parkWs.splice(index, 0, this._allocateParkWs());
+        if (index <= state.current)
+            state.current += 1;
         this._ensureWorkspaces(this._requiredWorkspaceCount());
         this._notify();
-        return state.nSpaces - 1;
+        return index;
     }
 
     removeCurrentSpace(monitorIndex) {
