@@ -738,6 +738,33 @@ export class SpaceManager {
         return this._insertSpace(monitorIndex, state.nSpaces);
     }
 
+    /**
+     * Reorder spaces on one monitor. Windows stay on the workspace they already
+     * occupy; only the left-to-right order of those spaces changes. The space
+     * currently on screen stays on screen.
+     */
+    moveSpace(monitorIndex, fromIndex, toIndex) {
+        const state = this._monitors.get(monitorIndex);
+        if (!state || fromIndex === toIndex)
+            return false;
+        if (fromIndex < 0 || toIndex < 0 ||
+            fromIndex >= state.nSpaces || toIndex >= state.nSpaces)
+            return false;
+
+        const [park] = state.parkWs.splice(fromIndex, 1);
+        state.parkWs.splice(toIndex, 0, park);
+
+        if (state.current === fromIndex)
+            state.current = toIndex;
+        else if (fromIndex < state.current && toIndex >= state.current)
+            state.current--;
+        else if (fromIndex > state.current && toIndex <= state.current)
+            state.current++;
+
+        this._notify();
+        return true;
+    }
+
     /** Insert a space at an index. Indices at or after it shift right. */
     _insertSpace(monitorIndex, atIndex) {
         const state = this._monitors.get(monitorIndex);

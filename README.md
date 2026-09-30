@@ -55,7 +55,7 @@ Shortcuts reuse GNOME’s existing workspace keys, but they now act on **one mon
 
 **Switching.** `Ctrl+Left` and `Ctrl+Right` move one space on the monitor under the mouse. The same actions are also bound to GNOME’s “Switch to workspace left/right” keys, so `Ctrl+Alt+Left` / `Right` and `Super+Page Up` / `Page Down` keep working. Change any of these from the gear menu: click the shortcut, then press the new keys. A three-finger horizontal swipe on a touchpad does the same switch.
 
-**The thumbnail menu.** `Ctrl+Up` opens it without switching. It also appears when you switch. How long it stays is the “Time until thumbnails disappear” setting. Hovering keeps it open.
+**The thumbnail menu.** `Ctrl+Up` opens it without switching. It also appears when you switch. How long it stays is the “Time until thumbnails disappear” setting. Hovering keeps it open. Drag a thumbnail sideways to change the order of spaces on that monitor.
 
 **Moving a window.** Hold **Shift** with the shortcut from settings. `Ctrl+Right` switches; `Ctrl+Shift+Right` moves the focused window onto that space and follows it. GNOME’s own move-window keys do the same on one monitor: `Ctrl+Shift+Alt+Left` / `Right`, or `Super+Shift+Page Up` / `Down`.
 

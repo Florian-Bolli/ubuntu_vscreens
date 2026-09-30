@@ -10,6 +10,7 @@ import {createThumbnailWithClose} from './thumbnails.js';
 
 const FADE_IN_MS = 120;
 const FADE_OUT_MS = 100;
+const DRAG_THRESHOLD = 8;
 
 /**
  * Transient overlay showing every space on one monitor, with the current one
@@ -32,6 +33,10 @@ class SpaceSwitcherPopup extends Clutter.Actor {
         this._openPrefs = openPrefs;
         this._hideTimeoutId = 0;
         this._fadingOut = false;
+        this._press = null;
+        this._dragGrabId = 0;
+        this._dragClone = null;
+        this._suppressClick = false;
 
         this.add_constraint(new Layout.MonitorConstraint({index: monitorIndex}));
 
@@ -139,6 +144,7 @@ class SpaceSwitcherPopup extends Clutter.Actor {
     }
 
     _rebuild(spaceIndex, nSpaces) {
+        this._teardownDrag();
         this._clearContents();
 
         this._label.text = `${spaceIndex + 1} / ${nSpaces}`;
@@ -157,6 +163,8 @@ class SpaceSwitcherPopup extends Clutter.Actor {
             });
 
             const jumpTo = () => {
+                if (this._suppressClick)
+                    return;
                 if (i !== this._spaceManager.currentSpace(this._monitorIndex)) {
                     this._spaceManager.switchTo(this._monitorIndex, i,
                         i >= spaceIndex ? 1 : -1);
@@ -190,16 +198,156 @@ class SpaceSwitcherPopup extends Clutter.Actor {
             number.connect('clicked', jumpTo);
             item.add_child(number);
 
-            item.connect('button-press-event', (_actor, event) => {
-                if (event.get_button() === 1) {
-                    jumpTo();
-                    return Clutter.EVENT_STOP;
-                }
-                return Clutter.EVENT_PROPAGATE;
-            });
+            if (nSpaces > 1) {
+                item.connect('captured-event', (_actor, event) => {
+                    if (event.type() !== Clutter.EventType.BUTTON_PRESS ||
+                        event.get_button() !== 1)
+                        return Clutter.EVENT_PROPAGATE;
+                    if (this._eventOnClose(event))
+                        return Clutter.EVENT_PROPAGATE;
+                    this._armDrag(i, item, event);
+                    return Clutter.EVENT_PROPAGATE;
+                });
+            }
 
             this._row.add_child(item);
         }
+    }
+
+    _eventOnClose(event) {
+        let actor = event.get_source?.() ?? null;
+        while (actor) {
+            const style = actor.style_class ?? '';
+            if (style.includes('vscreens-thumb-close'))
+                return true;
+            actor = actor.get_parent?.() ?? null;
+        }
+        return false;
+    }
+
+    _armDrag(index, item, event) {
+        this._teardownDrag();
+        const [x, y] = event.get_coords();
+        this._press = {index, item, x, y, dragging: false};
+        this._dragGrabId = global.stage.connect('captured-event', (_actor, stageEvent) => {
+            return this._onDragEvent(stageEvent);
+        });
+    }
+
+    _onDragEvent(event) {
+        if (!this._press)
+            return Clutter.EVENT_PROPAGATE;
+
+        const type = event.type();
+        const isMotion = type === Clutter.EventType.MOTION;
+        const isRelease = type === Clutter.EventType.BUTTON_RELEASE &&
+            event.get_button() === 1;
+        if (!isMotion && !isRelease)
+            return Clutter.EVENT_PROPAGATE;
+
+        const [x, y] = event.get_coords();
+        const dx = x - this._press.x;
+        const dy = y - this._press.y;
+        if (!this._press.dragging) {
+            if (!isRelease && dx * dx + dy * dy < DRAG_THRESHOLD * DRAG_THRESHOLD)
+                return Clutter.EVENT_PROPAGATE;
+            if (isRelease) {
+                this._teardownDrag();
+                return Clutter.EVENT_PROPAGATE;
+            }
+            this._press.dragging = true;
+            this._suppressClick = true;
+            this._cancelHide();
+            this._liftDragClone(this._press.item, x, y);
+        }
+
+        if (this._dragClone)
+            this._dragClone.set_position(x - this._dragOffsetX, y - this._dragOffsetY);
+
+        const target = this._dropIndex(x);
+        this._markDropTarget(target);
+
+        if (!isRelease)
+            return Clutter.EVENT_STOP;
+
+        const from = this._press.index;
+        this._teardownDrag();
+        // The button's clicked signal follows this release. Ignore that one
+        // click so a drop does not also switch and close the menu.
+        GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._suppressClick = false;
+            return GLib.SOURCE_REMOVE;
+        });
+
+        if (target !== from &&
+            this._spaceManager.moveSpace(this._monitorIndex, from, target)) {
+            const state = this._spaceManager.monitorStates
+                .find(s => s.monitorIndex === this._monitorIndex);
+            if (state)
+                this.showSpace(state.current, state.nSpaces);
+        }
+        this._scheduleHide();
+        return Clutter.EVENT_STOP;
+    }
+
+    _liftDragClone(item, pointerX, pointerY) {
+        const [ix, iy] = item.get_transformed_position();
+        this._dragOffsetX = pointerX - ix;
+        this._dragOffsetY = pointerY - iy;
+        this._dragClone = new Clutter.Clone({
+            source: item,
+            width: item.width,
+            height: item.height,
+        });
+        this._dragClone.set_position(ix, iy);
+        Main.uiGroup.add_child(this._dragClone);
+        item.opacity = 70;
+        item.add_style_class_name('vscreens-switcher-item-drag');
+    }
+
+    /** Index of the space the pointer would drop onto. */
+    _dropIndex(pointerX) {
+        const children = this._row.get_children();
+        for (let i = 0; i < children.length; i++) {
+            const [x] = children[i].get_transformed_position();
+            if (pointerX < x + children[i].width / 2)
+                return i;
+        }
+        return Math.max(0, children.length - 1);
+    }
+
+    _markDropTarget(index) {
+        const children = this._row.get_children();
+        for (let i = 0; i < children.length; i++) {
+            if (i === index)
+                children[i].add_style_class_name('vscreens-switcher-item-drop');
+            else
+                children[i].remove_style_class_name('vscreens-switcher-item-drop');
+        }
+    }
+
+    _teardownDrag() {
+        if (this._dragGrabId) {
+            global.stage.disconnect(this._dragGrabId);
+            this._dragGrabId = 0;
+        }
+        if (this._dragClone) {
+            this._dragClone.destroy();
+            this._dragClone = null;
+        }
+        const item = this._press?.item;
+        try {
+            if (item?.get_parent()) {
+                item.opacity = 255;
+                item.remove_style_class_name('vscreens-switcher-item-drag');
+                item.remove_style_class_name('vscreens-switcher-item-drop');
+            }
+        } catch (e) {
+            // The thumbnail row can already be gone when the popup is destroyed.
+        }
+        for (const child of this._row?.get_children?.() ?? [])
+            child.remove_style_class_name('vscreens-switcher-item-drop');
+        this._press = null;
     }
 
     _clearContents() {
@@ -238,6 +386,7 @@ class SpaceSwitcherPopup extends Clutter.Actor {
             GLib.source_remove(this._hideTimeoutId);
             this._hideTimeoutId = 0;
         }
+        this._teardownDrag();
         this._clearContents();
     }
 });

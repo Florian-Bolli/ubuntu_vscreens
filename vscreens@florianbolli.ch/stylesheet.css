@@ -146,6 +146,14 @@
   background-color: rgba(255, 255, 255, 0.14);
 }
 
+.vscreens-switcher-item-drop {
+  border: 2px solid rgba(120, 175, 255, 0.95);
+}
+
+.vscreens-switcher-item-drag {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
 .vscreens-switcher-number {
   padding-top: 4px;
   font-size: 0.85em;
