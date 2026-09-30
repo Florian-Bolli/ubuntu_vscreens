@@ -37,7 +37,7 @@
     <key name="show-osd" type="b">
       <default>true</default>
       <summary>Show an on-screen indicator when switching</summary>
-      <description>Briefly show the new space number on the monitor that switched.</description>
+      <description>Briefly show the thumbnail menu on the monitor that switched. The show-menu shortcut still opens it when this is off.</description>
     </key>
 
     <key name="collapse-empty-spaces" type="b">

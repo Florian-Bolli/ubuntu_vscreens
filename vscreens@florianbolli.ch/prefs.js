@@ -46,7 +46,7 @@ export default class VScreensPreferences extends ExtensionPreferences {
             'Width of space previews in the panel menu and the switch popup.'));
         appearance.add(this._switchRow(settings, 'show-osd',
             'Show switch popup',
-            'Thumbnails appear on the monitor that just changed space.'));
+            'Thumbnails appear on the monitor that just changed space. The show-menu shortcut still opens them when this is off.'));
         appearance.add(this._sizeRow(settings, 'switcher-timeout',
             'Time until thumbnails disappear',
             'Milliseconds the thumbnail menu stays after switching a screen. Hovering keeps it open.',

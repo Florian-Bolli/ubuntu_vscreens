@@ -272,9 +272,13 @@ export default class VScreensExtension extends Extension {
         this._showSwitcher(monitorIndex);
     }
 
-    /** Show the space strip on the monitor that just switched, and only there. */
-    _showSwitcher(monitorIndex) {
-        if (!this._settings.get_boolean('show-osd'))
+    /**
+     * Show the space strip on one monitor.
+     * Automatic shows (after a switch) honour "Show switch popup". The
+     * show-switcher shortcut always opens it.
+     */
+    _showSwitcher(monitorIndex, {force = false} = {}) {
+        if (!force && !this._settings.get_boolean('show-osd'))
             return;
 
         const state = this._spaceManager.monitorStates
@@ -319,7 +323,7 @@ export default class VScreensExtension extends Extension {
         this._grabShiftedMove('switch-previous', -1);
         this._grabShiftedMove('switch-next', 1);
         this._addOwnKeybinding('show-switcher', () => {
-            this._showSwitcher(this._spaceManager.activeMonitor());
+            this._showSwitcher(this._spaceManager.activeMonitor(), {force: true});
         });
 
         this._addOwnKeybinding('add-space', () => {
