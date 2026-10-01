@@ -40,6 +40,7 @@ class SpaceSwitcherPopup extends Clutter.Actor {
         this._dragGrabId = 0;
         this._dragClone = null;
         this._suppressClick = false;
+        this._unredirectHeld = false;
 
         this.add_constraint(new Layout.MonitorConstraint({index: monitorIndex}));
 
@@ -121,6 +122,10 @@ class SpaceSwitcherPopup extends Clutter.Actor {
                 mode: Clutter.AnimationMode.EASE_OUT_QUAD,
             });
         }
+
+        // A fullscreen Electron window (Cursor) is scanned out directly, which
+        // hides this overlay at once and lets the later fade flash it back.
+        this._holdUnredirect();
 
         this._scheduleHide();
     }
@@ -389,6 +394,7 @@ class SpaceSwitcherPopup extends Clutter.Actor {
                 this._fadingOut = false;
                 this.visible = false;
                 this._row.opacity = 255;
+                this._releaseUnredirect();
                 // Drop the clones while hidden; they are rebuilt on the next
                 // switch anyway and the content would be stale.
                 this._clearContents();
@@ -402,6 +408,21 @@ class SpaceSwitcherPopup extends Clutter.Actor {
             this._hideTimeoutId = 0;
         }
         this._teardownDrag();
+        this._releaseUnredirect();
         this._clearContents();
+    }
+
+    _holdUnredirect() {
+        if (this._unredirectHeld)
+            return;
+        this._unredirectHeld = true;
+        this._spaceManager.holdUnredirect();
+    }
+
+    _releaseUnredirect() {
+        if (!this._unredirectHeld)
+            return;
+        this._unredirectHeld = false;
+        this._spaceManager.releaseUnredirect();
     }
 });

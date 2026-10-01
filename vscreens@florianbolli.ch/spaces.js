@@ -54,6 +54,9 @@ export class SpaceManager {
 
         this._monitors = new Map();
         this._animating = new Set();
+        // Mutter drops shell overlays while a fullscreen window is unredirected.
+        // Each slide and each visible thumbnail menu holds one count.
+        this._unredirectHolds = 0;
         this._slides = new Map();
         this._windowSignals = new Map();
         // Window -> {monitorIndex, parkWs} for the space it left to go fullscreen.
@@ -408,10 +411,11 @@ export class SpaceManager {
             group.progress = group.getWorkspaceProgress(fromWs);
             this._slides.set(monitorIndex, {group, token});
             this._animating.add(monitorIndex);
-            setUnredirectSuppressed(true);
+            this.holdUnredirect();
         } catch (e) {
             this._slides.delete(monitorIndex);
-            this._animating.delete(monitorIndex);
+            if (this._animating.delete(monitorIndex))
+                this.releaseUnredirect();
             group.destroy();
             logError(e, 'VScreens: could not start the slide overlay');
             return;
@@ -423,8 +427,7 @@ export class SpaceManager {
                 return;
             this._slides.delete(monitorIndex);
             this._animating.delete(monitorIndex);
-            if (this._animating.size === 0)
-                setUnredirectSuppressed(false);
+            this.releaseUnredirect();
             group.destroy();
         };
 
@@ -518,10 +521,28 @@ export class SpaceManager {
         if (!slide)
             return;
         this._slides.delete(monitorIndex);
-        this._animating.delete(monitorIndex);
+        const held = this._animating.delete(monitorIndex);
         slide.group.remove_all_transitions();
         slide.group.destroy();
-        if (this._animating.size === 0)
+        if (held)
+            this.releaseUnredirect();
+    }
+
+    /**
+     * Keep shell overlays painted over a fullscreen window. Callers pair each
+     * hold with one release. Mutter's own switch is refcounted the same way.
+     */
+    holdUnredirect() {
+        this._unredirectHolds++;
+        if (this._unredirectHolds === 1)
+            setUnredirectSuppressed(true);
+    }
+
+    releaseUnredirect() {
+        if (this._unredirectHolds === 0)
+            return;
+        this._unredirectHolds--;
+        if (this._unredirectHolds === 0)
             setUnredirectSuppressed(false);
     }
 
