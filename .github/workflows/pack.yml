@@ -29,3 +29,14 @@ jobs:
           name: vscreens@florianbolli.ch.shell-extension.zip
           path: vscreens@florianbolli.ch.shell-extension.zip
           if-no-files-found: error
+
+      # Pull requests only pack the zip. A push to main also submits it for
+      # review. Secrets: EGO_USERNAME and EGO_PASSWORD for extensions.gnome.org.
+      - name: Upload to extensions.gnome.org
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          EGO_USERNAME: ${{ secrets.EGO_USERNAME }}
+          EGO_PASSWORD: ${{ secrets.EGO_PASSWORD }}
+        run: |
+          sudo apt-get install --yes --no-install-recommends python3-requests python3-bs4
+          python3 .github/upload-ego.py vscreens@florianbolli.ch.shell-extension.zip

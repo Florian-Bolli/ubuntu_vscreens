@@ -8,8 +8,13 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import {createThumbnailWithClose} from './thumbnails.js';
 
-const HIDE_TIMEOUT = 1400;
-const FADE_TIME = 120;
+const FADE_IN_MS = 120;
+const FADE_OUT_MS = 240;
+// Window clones ignore a fading ancestor and stay solid after the panel
+// background has already gone. The row is slightly shorter so those
+// previews finish with the background instead of after it.
+const THUMB_FADE_OUT_MS = 200;
+const DRAG_THRESHOLD = 8;
 
 /**
  * Transient overlay showing every space on one monitor, with the current one
@@ -22,7 +27,6 @@ class SpaceSwitcherPopup extends Clutter.Actor {
         super._init({
             // BinLayout so the card honours its own centring inside the monitor.
             layout_manager: new Clutter.BinLayout(),
-            opacity: 0,
             visible: false,
         });
 
@@ -31,6 +35,12 @@ class SpaceSwitcherPopup extends Clutter.Actor {
         this._settings = settings;
         this._openPrefs = openPrefs;
         this._hideTimeoutId = 0;
+        this._fadingOut = false;
+        this._press = null;
+        this._dragGrabId = 0;
+        this._dragClone = null;
+        this._suppressClick = false;
+        this._unredirectHeld = false;
 
         this.add_constraint(new Layout.MonitorConstraint({index: monitorIndex}));
 
@@ -82,6 +92,9 @@ class SpaceSwitcherPopup extends Clutter.Actor {
         this._row = new St.BoxLayout({
             style_class: 'vscreens-switcher-row',
             y_align: Clutter.ActorAlign.CENTER,
+            // Flatten the clones into this row so its opacity fades them
+            // together with the panel, instead of leaving them fully opaque.
+            offscreen_redirect: Clutter.OffscreenRedirect.ALWAYS,
         });
         this._card.add_child(this._row);
 
@@ -96,15 +109,23 @@ class SpaceSwitcherPopup extends Clutter.Actor {
     showSpace(spaceIndex, nSpaces) {
         this._rebuild(spaceIndex, nSpaces);
 
-        if (!this.visible) {
+        if (!this.visible || this._fadingOut) {
+            this._fadingOut = false;
+            this._card.remove_all_transitions();
+            this._row.remove_all_transitions();
             this.visible = true;
-            this.opacity = 0;
-            this.ease({
+            this._card.opacity = 0;
+            this._row.opacity = 255;
+            this._card.ease({
                 opacity: 255,
-                duration: FADE_TIME,
+                duration: FADE_IN_MS,
                 mode: Clutter.AnimationMode.EASE_OUT_QUAD,
             });
         }
+
+        // A fullscreen Electron window (Cursor) is scanned out directly, which
+        // hides this overlay at once and lets the later fade flash it back.
+        this._holdUnredirect();
 
         this._scheduleHide();
     }
@@ -118,8 +139,9 @@ class SpaceSwitcherPopup extends Clutter.Actor {
 
     _scheduleHide() {
         this._cancelHide();
+        const timeout = this._settings.get_int('switcher-timeout');
         this._hideTimeoutId = GLib.timeout_add(
-            GLib.PRIORITY_DEFAULT, HIDE_TIMEOUT, () => {
+            GLib.PRIORITY_DEFAULT, timeout, () => {
                 this._hideTimeoutId = 0;
                 this._fadeOut();
                 return GLib.SOURCE_REMOVE;
@@ -135,6 +157,7 @@ class SpaceSwitcherPopup extends Clutter.Actor {
     }
 
     _rebuild(spaceIndex, nSpaces) {
+        this._teardownDrag();
         this._clearContents();
 
         this._label.text = `${spaceIndex + 1} / ${nSpaces}`;
@@ -153,6 +176,8 @@ class SpaceSwitcherPopup extends Clutter.Actor {
             });
 
             const jumpTo = () => {
+                if (this._suppressClick)
+                    return;
                 if (i !== this._spaceManager.currentSpace(this._monitorIndex)) {
                     this._spaceManager.switchTo(this._monitorIndex, i,
                         i >= spaceIndex ? 1 : -1);
@@ -186,16 +211,156 @@ class SpaceSwitcherPopup extends Clutter.Actor {
             number.connect('clicked', jumpTo);
             item.add_child(number);
 
-            item.connect('button-press-event', (_actor, event) => {
-                if (event.get_button() === 1) {
-                    jumpTo();
-                    return Clutter.EVENT_STOP;
-                }
-                return Clutter.EVENT_PROPAGATE;
-            });
+            if (nSpaces > 1) {
+                item.connect('captured-event', (_actor, event) => {
+                    if (event.type() !== Clutter.EventType.BUTTON_PRESS ||
+                        event.get_button() !== 1)
+                        return Clutter.EVENT_PROPAGATE;
+                    if (this._eventOnClose(event))
+                        return Clutter.EVENT_PROPAGATE;
+                    this._armDrag(i, item, event);
+                    return Clutter.EVENT_PROPAGATE;
+                });
+            }
 
             this._row.add_child(item);
         }
+    }
+
+    _eventOnClose(event) {
+        let actor = event.get_source?.() ?? null;
+        while (actor) {
+            const style = actor.style_class ?? '';
+            if (style.includes('vscreens-thumb-close'))
+                return true;
+            actor = actor.get_parent?.() ?? null;
+        }
+        return false;
+    }
+
+    _armDrag(index, item, event) {
+        this._teardownDrag();
+        const [x, y] = event.get_coords();
+        this._press = {index, item, x, y, dragging: false};
+        this._dragGrabId = global.stage.connect('captured-event', (_actor, stageEvent) => {
+            return this._onDragEvent(stageEvent);
+        });
+    }
+
+    _onDragEvent(event) {
+        if (!this._press)
+            return Clutter.EVENT_PROPAGATE;
+
+        const type = event.type();
+        const isMotion = type === Clutter.EventType.MOTION;
+        const isRelease = type === Clutter.EventType.BUTTON_RELEASE &&
+            event.get_button() === 1;
+        if (!isMotion && !isRelease)
+            return Clutter.EVENT_PROPAGATE;
+
+        const [x, y] = event.get_coords();
+        const dx = x - this._press.x;
+        const dy = y - this._press.y;
+        if (!this._press.dragging) {
+            if (!isRelease && dx * dx + dy * dy < DRAG_THRESHOLD * DRAG_THRESHOLD)
+                return Clutter.EVENT_PROPAGATE;
+            if (isRelease) {
+                this._teardownDrag();
+                return Clutter.EVENT_PROPAGATE;
+            }
+            this._press.dragging = true;
+            this._suppressClick = true;
+            this._cancelHide();
+            this._liftDragClone(this._press.item, x, y);
+        }
+
+        if (this._dragClone)
+            this._dragClone.set_position(x - this._dragOffsetX, y - this._dragOffsetY);
+
+        const target = this._dropIndex(x);
+        this._markDropTarget(target);
+
+        if (!isRelease)
+            return Clutter.EVENT_STOP;
+
+        const from = this._press.index;
+        this._teardownDrag();
+        // The button's clicked signal follows this release. Ignore that one
+        // click so a drop does not also switch and close the menu.
+        GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._suppressClick = false;
+            return GLib.SOURCE_REMOVE;
+        });
+
+        if (target !== from &&
+            this._spaceManager.moveSpace(this._monitorIndex, from, target)) {
+            const state = this._spaceManager.monitorStates
+                .find(s => s.monitorIndex === this._monitorIndex);
+            if (state)
+                this.showSpace(state.current, state.nSpaces);
+        }
+        this._scheduleHide();
+        return Clutter.EVENT_STOP;
+    }
+
+    _liftDragClone(item, pointerX, pointerY) {
+        const [ix, iy] = item.get_transformed_position();
+        this._dragOffsetX = pointerX - ix;
+        this._dragOffsetY = pointerY - iy;
+        this._dragClone = new Clutter.Clone({
+            source: item,
+            width: item.width,
+            height: item.height,
+        });
+        this._dragClone.set_position(ix, iy);
+        Main.uiGroup.add_child(this._dragClone);
+        item.opacity = 70;
+        item.add_style_class_name('vscreens-switcher-item-drag');
+    }
+
+    /** Index of the space the pointer would drop onto. */
+    _dropIndex(pointerX) {
+        const children = this._row.get_children();
+        for (let i = 0; i < children.length; i++) {
+            const [x] = children[i].get_transformed_position();
+            if (pointerX < x + children[i].width / 2)
+                return i;
+        }
+        return Math.max(0, children.length - 1);
+    }
+
+    _markDropTarget(index) {
+        const children = this._row.get_children();
+        for (let i = 0; i < children.length; i++) {
+            if (i === index)
+                children[i].add_style_class_name('vscreens-switcher-item-drop');
+            else
+                children[i].remove_style_class_name('vscreens-switcher-item-drop');
+        }
+    }
+
+    _teardownDrag() {
+        if (this._dragGrabId) {
+            global.stage.disconnect(this._dragGrabId);
+            this._dragGrabId = 0;
+        }
+        if (this._dragClone) {
+            this._dragClone.destroy();
+            this._dragClone = null;
+        }
+        const item = this._press?.item;
+        try {
+            if (item?.get_parent()) {
+                item.opacity = 255;
+                item.remove_style_class_name('vscreens-switcher-item-drag');
+                item.remove_style_class_name('vscreens-switcher-item-drop');
+            }
+        } catch (e) {
+            // The thumbnail row can already be gone when the popup is destroyed.
+        }
+        for (const child of this._row?.get_children?.() ?? [])
+            child.remove_style_class_name('vscreens-switcher-item-drop');
+        this._press = null;
     }
 
     _clearContents() {
@@ -208,12 +373,28 @@ class SpaceSwitcherPopup extends Clutter.Actor {
     }
 
     _fadeOut() {
-        this.ease({
+        if (!this.visible || this._fadingOut)
+            return;
+
+        this._fadingOut = true;
+        this._card.remove_all_transitions();
+        this._row.remove_all_transitions();
+        this._row.ease({
             opacity: 0,
-            duration: FADE_TIME,
-            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+            duration: THUMB_FADE_OUT_MS,
+            mode: Clutter.AnimationMode.EASE_IN_OUT_CUBIC,
+        });
+        this._card.ease({
+            opacity: 0,
+            duration: FADE_OUT_MS,
+            mode: Clutter.AnimationMode.EASE_IN_OUT_CUBIC,
             onComplete: () => {
+                if (!this._fadingOut)
+                    return;
+                this._fadingOut = false;
                 this.visible = false;
+                this._row.opacity = 255;
+                this._releaseUnredirect();
                 // Drop the clones while hidden; they are rebuilt on the next
                 // switch anyway and the content would be stale.
                 this._clearContents();
@@ -226,6 +407,22 @@ class SpaceSwitcherPopup extends Clutter.Actor {
             GLib.source_remove(this._hideTimeoutId);
             this._hideTimeoutId = 0;
         }
+        this._teardownDrag();
+        this._releaseUnredirect();
         this._clearContents();
+    }
+
+    _holdUnredirect() {
+        if (this._unredirectHeld)
+            return;
+        this._unredirectHeld = true;
+        this._spaceManager.holdUnredirect();
+    }
+
+    _releaseUnredirect() {
+        if (!this._unredirectHeld)
+            return;
+        this._unredirectHeld = false;
+        this._spaceManager.releaseUnredirect();
     }
 });

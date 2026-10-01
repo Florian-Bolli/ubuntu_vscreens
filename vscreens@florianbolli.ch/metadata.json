@@ -1,8 +1,9 @@
 {
   "uuid": "vscreens@florianbolli.ch",
   "name": "VScreens",
+  "version": 3,
   "description": "Independent virtual desktops per monitor. Each screen has its own spaces; switching one does not move the others.",
-  "shell-version": ["46"],
+  "shell-version": ["46", "47", "48", "49", "50"],
   "url": "https://github.com/Florian-Bolli/ubuntu_vscreens",
   "settings-schema": "org.gnome.shell.extensions.vscreens"
 }

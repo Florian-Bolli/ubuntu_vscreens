@@ -37,7 +37,7 @@
     <key name="show-osd" type="b">
       <default>true</default>
       <summary>Show an on-screen indicator when switching</summary>
-      <description>Briefly show the new space number on the monitor that switched.</description>
+      <description>Briefly show the thumbnail menu on the monitor that switched. The show-menu shortcut still opens it when this is off.</description>
     </key>
 
     <key name="collapse-empty-spaces" type="b">
@@ -51,6 +51,49 @@
       <range min="160" max="600"/>
       <summary>Thumbnail width</summary>
       <description>Width in pixels of space previews in the panel menu and switch popup.</description>
+    </key>
+
+    <key name="switcher-timeout" type="i">
+      <default>1400</default>
+      <range min="0" max="10000"/>
+      <summary>Time until the thumbnail menu disappears</summary>
+      <description>Milliseconds the thumbnail menu stays after switching a screen. Hovering the menu keeps it open. Set to 0 to hide it immediately.</description>
+    </key>
+
+    <key name="enabled" type="b">
+      <default>true</default>
+      <summary>Enable VScreens</summary>
+      <description>Turn per-monitor spaces off without uninstalling the extension. GNOME's own workspace switching comes back.</description>
+    </key>
+
+    <key name="isolate-fullscreen" type="b">
+      <default>true</default>
+      <summary>New space for a fullscreen window</summary>
+      <description>When a window becomes fullscreen, or a fullscreen window is moved onto a space that already has windows, put it on its own space.</description>
+    </key>
+
+    <key name="isolate-maximized" type="b">
+      <default>false</default>
+      <summary>New space for a maximized window</summary>
+      <description>When a window is maximized, or a maximized window is moved onto a busy space, put it on its own space.</description>
+    </key>
+
+    <key name="switch-previous" type="as">
+      <default><![CDATA[['<Control>Left']]]></default>
+      <summary>Previous space</summary>
+      <description>Switch to the previous space on the current monitor.</description>
+    </key>
+
+    <key name="switch-next" type="as">
+      <default><![CDATA[['<Control>Right']]]></default>
+      <summary>Next space</summary>
+      <description>Switch to the next space on the current monitor.</description>
+    </key>
+
+    <key name="show-switcher" type="as">
+      <default><![CDATA[['<Control>Up']]]></default>
+      <summary>Show the thumbnail menu</summary>
+      <description>Show the thumbnail menu for the current monitor without switching space.</description>
     </key>
 
     <key name="add-space" type="as">
