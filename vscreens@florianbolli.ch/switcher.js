@@ -9,7 +9,11 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {createThumbnailWithClose} from './thumbnails.js';
 
 const FADE_IN_MS = 120;
-const FADE_OUT_MS = 100;
+const FADE_OUT_MS = 240;
+// Window clones ignore a fading ancestor and stay solid after the panel
+// background has already gone. The row is slightly shorter so those
+// previews finish with the background instead of after it.
+const THUMB_FADE_OUT_MS = 200;
 const DRAG_THRESHOLD = 8;
 
 /**
@@ -23,7 +27,6 @@ class SpaceSwitcherPopup extends Clutter.Actor {
         super._init({
             // BinLayout so the card honours its own centring inside the monitor.
             layout_manager: new Clutter.BinLayout(),
-            opacity: 0,
             visible: false,
         });
 
@@ -88,6 +91,9 @@ class SpaceSwitcherPopup extends Clutter.Actor {
         this._row = new St.BoxLayout({
             style_class: 'vscreens-switcher-row',
             y_align: Clutter.ActorAlign.CENTER,
+            // Flatten the clones into this row so its opacity fades them
+            // together with the panel, instead of leaving them fully opaque.
+            offscreen_redirect: Clutter.OffscreenRedirect.ALWAYS,
         });
         this._card.add_child(this._row);
 
@@ -104,10 +110,12 @@ class SpaceSwitcherPopup extends Clutter.Actor {
 
         if (!this.visible || this._fadingOut) {
             this._fadingOut = false;
-            this.remove_all_transitions();
+            this._card.remove_all_transitions();
+            this._row.remove_all_transitions();
             this.visible = true;
-            this.opacity = 0;
-            this.ease({
+            this._card.opacity = 0;
+            this._row.opacity = 255;
+            this._card.ease({
                 opacity: 255,
                 duration: FADE_IN_MS,
                 mode: Clutter.AnimationMode.EASE_OUT_QUAD,
@@ -364,16 +372,23 @@ class SpaceSwitcherPopup extends Clutter.Actor {
             return;
 
         this._fadingOut = true;
-        this.remove_all_transitions();
-        this.ease({
+        this._card.remove_all_transitions();
+        this._row.remove_all_transitions();
+        this._row.ease({
+            opacity: 0,
+            duration: THUMB_FADE_OUT_MS,
+            mode: Clutter.AnimationMode.EASE_IN_OUT_CUBIC,
+        });
+        this._card.ease({
             opacity: 0,
             duration: FADE_OUT_MS,
-            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+            mode: Clutter.AnimationMode.EASE_IN_OUT_CUBIC,
             onComplete: () => {
                 if (!this._fadingOut)
                     return;
                 this._fadingOut = false;
                 this.visible = false;
+                this._row.opacity = 255;
                 // Drop the clones while hidden; they are rebuilt on the next
                 // switch anyway and the content would be stale.
                 this._clearContents();
