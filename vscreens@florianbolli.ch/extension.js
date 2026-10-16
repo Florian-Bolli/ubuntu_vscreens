@@ -1,6 +1,7 @@
+import Clutter from 'gi://Clutter';
+import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
-import Clutter from 'gi://Clutter';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {FitMode, WorkspacesView} from 'resource:///org/gnome/shell/ui/workspacesView.js';
@@ -57,7 +58,11 @@ export default class VScreensExtension extends Extension {
                 this._onShiftAccelerator(action);
             });
 
-        this._spaceManager.setChangedCallback(() => this._indicator?.sync());
+        this._spaceManager.setChangedCallback(() => {
+            this._indicator?.sync();
+            for (const popup of this._switchers.values())
+                popup.syncIfShown();
+        });
 
         this._workspaceChangedId = global.workspace_manager.connect(
             'active-workspace-changed',
@@ -66,15 +71,17 @@ export default class VScreensExtension extends Extension {
                     this._spaceManager.handleActiveWorkspaceChanged();
             });
 
-        // A monitor being plugged or unplugged invalidates every monitor index,
-        // so rebuild from scratch rather than trying to migrate the old layout.
-        this._monitorsChangedId = Main.layoutManager.connect('monitors-changed', () => {
-            if (!this._running)
-                return;
-            this._destroySwitchers();
-            this._spaceManager.build();
-            this._syncOverviewPatch();
-        });
+        // Suspend and lid-close emit this as the panel powers off and back on.
+        // Rebuilding there dumps every window onto one space, so wait until the
+        // set of screens settles and keep the layout when those screens return.
+        this._monitorSettleId = 0;
+        this._emptyMonitorTries = 0;
+        this._waitedForMonitor = false;
+        this._monitorsChangedId = Main.layoutManager.connect(
+            'monitors-changed', () => this._onMonitorsChanged());
+
+        this._sessionId = Main.sessionMode.connect(
+            'updated', () => this._onSessionUpdated());
 
         this._focusChangedId = global.display.connect(
             'notify::focus-window', () => this._indicator?.sync());
@@ -123,6 +130,11 @@ export default class VScreensExtension extends Extension {
             Main.layoutManager.disconnect(this._monitorsChangedId);
             this._monitorsChangedId = null;
         }
+        if (this._sessionId) {
+            Main.sessionMode.disconnect(this._sessionId);
+            this._sessionId = 0;
+        }
+        this._cancelMonitorSettle();
         if (this._focusChangedId) {
             global.display.disconnect(this._focusChangedId);
             this._focusChangedId = null;
@@ -179,6 +191,7 @@ export default class VScreensExtension extends Extension {
 
     _stop() {
         this._running = false;
+        this._cancelMonitorSettle();
         this._releaseWorkspaceSwipe();
         this._unbindKeys();
         this._unpatchOverview();
@@ -253,8 +266,98 @@ export default class VScreensExtension extends Extension {
     }
 
     _syncIndicatorVisibility() {
-        if (this._indicator)
-            this._indicator.visible = this._settings.get_boolean('show-indicator');
+        if (!this._indicator)
+            return;
+        const show = this._settings.get_boolean('show-indicator') &&
+            !Main.sessionMode.isLocked;
+        this._indicator.visible = show;
+        if (this._indicator.container)
+            this._indicator.container.visible = show;
+    }
+
+    _onSessionUpdated() {
+        if (Main.sessionMode.isLocked) {
+            this._indicator?.menu?.close();
+            this._destroySwitchers();
+            this._spaceManager?.holdLayout();
+        } else if (this._running && !this._monitorSettleId) {
+            this._spaceManager?.releaseLayout();
+        }
+        this._syncIndicatorVisibility();
+    }
+
+    /**
+     * Displays often vanish and come back one at a time across suspend.
+     * Wait out that burst. An empty list, or a list that is only some of the
+     * screens we already had, is not a reason to throw the layout away.
+     */
+    _onMonitorsChanged() {
+        if (!this._running)
+            return;
+        this._emptyMonitorTries = 0;
+        this._waitedForMonitor = false;
+        this._spaceManager.holdLayout();
+        this._scheduleMonitorSettle(800);
+    }
+
+    _scheduleMonitorSettle(delay) {
+        if (this._monitorSettleId)
+            GLib.source_remove(this._monitorSettleId);
+        this._monitorSettleId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
+            this._monitorSettleId = 0;
+            this._settleMonitors();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _cancelMonitorSettle() {
+        if (this._monitorSettleId) {
+            GLib.source_remove(this._monitorSettleId);
+            this._monitorSettleId = 0;
+        }
+        this._emptyMonitorTries = 0;
+        this._waitedForMonitor = false;
+    }
+
+    _settleMonitors() {
+        if (!this._running)
+            return;
+
+        if (Main.layoutManager.monitors.length === 0) {
+            this._emptyMonitorTries++;
+            if (this._emptyMonitorTries <= 10)
+                this._scheduleMonitorSettle(500);
+            return;
+        }
+        this._emptyMonitorTries = 0;
+
+        const adopted = this._spaceManager.adoptMonitors();
+        if (adopted === 'same' || adopted === 'moved') {
+            if (adopted === 'moved')
+                this._destroySwitchers();
+            this._waitedForMonitor = false;
+            this._releaseLayoutIfUnlocked();
+            return;
+        }
+
+        // A screen that is only late, not unplugged, shows up as a subset.
+        // Give it a moment before rebuilding.
+        if (adopted === 'subset' && !this._waitedForMonitor) {
+            this._waitedForMonitor = true;
+            this._scheduleMonitorSettle(2000);
+            return;
+        }
+
+        this._waitedForMonitor = false;
+        this._destroySwitchers();
+        this._spaceManager.build();
+        this._syncOverviewPatch();
+        this._releaseLayoutIfUnlocked();
+    }
+
+    _releaseLayoutIfUnlocked() {
+        if (!Main.sessionMode.isLocked)
+            this._spaceManager.releaseLayout();
     }
 
     // --------------------------------------------------------------- shortcuts
@@ -278,6 +381,8 @@ export default class VScreensExtension extends Extension {
      * show-switcher shortcut always opens it.
      */
     _showSwitcher(monitorIndex, {force = false} = {}) {
+        if (Main.sessionMode.isLocked)
+            return;
         if (!force && !this._settings.get_boolean('show-osd'))
             return;
 
