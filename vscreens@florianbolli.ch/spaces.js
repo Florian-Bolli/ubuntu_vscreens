@@ -35,8 +35,11 @@ function setUnredirectSuppressed(suppressed) {
 
 /** Per-monitor state: which spaces exist, which one is on screen. */
 class MonitorSpaces {
-    constructor(monitorIndex) {
+    constructor(monitorIndex, identity) {
         this.monitorIndex = monitorIndex;
+        // Connector name when Mutter reports one, otherwise the geometry.
+        // Suspend keeps the connector and often changes the index.
+        this.identity = identity;
         this.parkWs = [];
         this.current = 0;
     }
@@ -71,6 +74,12 @@ export class SpaceManager {
         this._compactId = 0;
         this._workspaceFixId = 0;
         this._activatingStage = false;
+        this._holdLayout = false;
+        this._pendingSwitches = new Map();
+        this._nWorkspacesId = 0;
+        this._deferredSwitchIdle = 0;
+        this._flushingDeferred = false;
+        this._flushAgain = false;
         this._displaySignals = [];
 
         this._onChanged = null;
@@ -104,7 +113,7 @@ export class SpaceManager {
 
         let nextWs = STAGE + 1;
         for (const monitor of Main.layoutManager.monitors) {
-            const state = new MonitorSpaces(monitor.index);
+            const state = new MonitorSpaces(monitor.index, this._identityFor(monitor));
             for (let i = 0; i < nSpaces; i++)
                 state.parkWs.push(nextWs++);
             this._monitors.set(monitor.index, state);
@@ -141,6 +150,8 @@ export class SpaceManager {
      */
     pause() {
         this._paused = true;
+        this._holdLayout = false;
+        this._cancelDeferredSwitches();
         if (this._workspaceFixId) {
             GLib.source_remove(this._workspaceFixId);
             this._workspaceFixId = 0;
@@ -168,6 +179,8 @@ export class SpaceManager {
         this._untrackAllWindows();
 
         this._cancelAllSlides();
+        this._cancelDeferredSwitches();
+        this._holdLayout = false;
         this._fullscreenHomes.clear();
         this._gatherStrayWindows();
         this._monitors.clear();
@@ -188,6 +201,31 @@ export class SpaceManager {
             this._mutterPrefs.set_boolean('workspaces-only-on-primary', false);
         if (this._wmPrefs.get_int('num-workspaces') !== count)
             this._wmPrefs.set_int('num-workspaces', count);
+
+        // The settings change can create the workspaces a frame later. A swipe
+        // that just added a space switches to it in this same turn, so the
+        // workspace has to exist before we return.
+        const manager = global.workspace_manager;
+        const wasInternal = this._internal;
+        this._internal = true;
+        try {
+            let guard = 0;
+            while (manager.get_n_workspaces() < count && guard < count + 1) {
+                let workspace = null;
+                try {
+                    workspace = manager.append_new_workspace(
+                        false, global.get_current_time());
+                } catch (e) {
+                    logError(e, 'VScreens: could not add a workspace');
+                    break;
+                }
+                if (!workspace)
+                    break;
+                guard++;
+            }
+        } finally {
+            this._internal = wasInternal;
+        }
     }
 
     _restoreDesktopSettings() {
@@ -197,6 +235,116 @@ export class SpaceManager {
         this._mutterPrefs.set_boolean('workspaces-only-on-primary', this._savedPrimary);
         this._wmPrefs.set_int('num-workspaces', this._savedWorkspaces);
         this._desktopSaved = false;
+    }
+
+    /**
+     * Suspend powers the panel off and Mutter reports the screens again, often
+     * under new indexes. Keep each screen's spaces when the same displays are
+     * back. A screen that is merely late is a subset; a genuinely new screen
+     * is a change and the caller rebuilds.
+     */
+    adoptMonitors() {
+        const monitors = [...Main.layoutManager.monitors];
+        if (monitors.length === 0 || this._monitors.size === 0)
+            return 'changed';
+
+        // One laptop panel is the same screen after the lid opens, even when
+        // its connector string or mode is reported differently.
+        if (monitors.length === 1 && this._monitors.size === 1) {
+            const moved = this._retarget([[monitors[0], [...this._monitors.values()][0]]]);
+            return moved ? 'moved' : 'same';
+        }
+
+        const incoming = monitors.map(monitor => ({
+            monitor,
+            identity: this._identityFor(monitor),
+        }));
+        const pool = new Map();
+        for (const state of this._monitors.values()) {
+            if (!state.identity || pool.has(state.identity))
+                return 'changed';
+            pool.set(state.identity, state);
+        }
+
+        const seen = new Set();
+        for (const info of incoming) {
+            if (!info.identity || seen.has(info.identity) || !pool.has(info.identity))
+                return 'changed';
+            seen.add(info.identity);
+        }
+
+        if (incoming.length < this._monitors.size)
+            return 'subset';
+
+        const pairs = incoming.map(info => [info.monitor, pool.get(info.identity)]);
+        const moved = this._retarget(pairs);
+        return moved ? 'moved' : 'same';
+    }
+
+    _retarget(pairs) {
+        const next = new Map();
+        let moved = false;
+        for (const [monitor, state] of pairs) {
+            const identity = this._identityFor(monitor);
+            if (state.monitorIndex !== monitor.index)
+                moved = true;
+            state.monitorIndex = monitor.index;
+            state.identity = identity;
+            next.set(monitor.index, state);
+        }
+        this._monitors = next;
+        if (moved)
+            this._notify();
+        return moved;
+    }
+
+    _identityFor(monitor) {
+        const connector = this._connectorForIndex(monitor.index);
+        if (connector)
+            return `conn:${connector}`;
+        return `geom:${monitor.x},${monitor.y},${monitor.width}x${monitor.height}`;
+    }
+
+    _connectorForIndex(index) {
+        try {
+            const manager = global.backend.get_monitor_manager();
+            const names = [];
+            for (const monitor of manager.get_monitors()) {
+                if (typeof monitor.is_active === 'function' && !monitor.is_active())
+                    continue;
+                const connector = monitor.get_connector?.();
+                if (!connector)
+                    continue;
+                if (manager.get_monitor_for_connector(connector) === index)
+                    names.push(connector);
+            }
+            names.sort();
+            return names.join('+');
+        } catch (e) {
+            if (!this._connectorFailed) {
+                this._connectorFailed = true;
+                logError(e, 'VScreens: could not read monitor connectors');
+            }
+            return '';
+        }
+    }
+
+    /**
+     * Lid close, suspend, and the following monitor storm move the active
+     * workspace on their own. While that is happening, put it back on the
+     * stage instead of treating it as the user switching space.
+     */
+    holdLayout() {
+        if (!this._paused)
+            this._holdLayout = true;
+    }
+
+    releaseLayout() {
+        if (!this._holdLayout)
+            return;
+        this._holdLayout = false;
+        if (!this._paused)
+            this._activateStage();
     }
 
     // -------------------------------------------------------------- inspection
@@ -291,10 +439,9 @@ export class SpaceManager {
         if (!state || delta === 0)
             return;
 
-        // Grow instead of wrapping: next past the last space creates a new one,
-        // unless that last space is already empty — then another empty would
-        // just be collapsed again.
-        // Previous from the first space stays put.
+        // Grow instead of wrapping. Past either end creates a new space,
+        // unless the one you are leaving is already empty — then another
+        // empty would just be collapsed again.
         if (delta > 0 && state.current === state.nSpaces - 1) {
             if (this._collapsesEmpty() && this._isSpaceEmpty(monitorIndex, state.current))
                 return;
@@ -303,18 +450,25 @@ export class SpaceManager {
                 this.switchTo(monitorIndex, added, 1);
             return;
         }
-        if (delta < 0 && state.current === 0)
+        if (delta < 0 && state.current === 0) {
+            if (this._collapsesEmpty() && this._isSpaceEmpty(monitorIndex, state.current))
+                return;
+            const added = this._insertSpace(monitorIndex, 0);
+            if (added !== null)
+                this.switchTo(monitorIndex, added, -1);
             return;
+        }
 
         this.switchTo(monitorIndex, state.current + delta, delta > 0 ? 1 : -1);
     }
 
     switchTo(monitorIndex, spaceIndex, direction = 1) {
         const state = this._monitors.get(monitorIndex);
-        if (!state || spaceIndex === state.current)
+        if (!state || spaceIndex === state.current ||
+            spaceIndex < 0 || spaceIndex >= state.nSpaces) {
+            this._pendingSwitches.delete(monitorIndex);
             return;
-        if (spaceIndex < 0 || spaceIndex >= state.nSpaces)
-            return;
+        }
         // A click or another shortcut during the slide used to be dropped, so
         // the menu closed and the space never changed. Cancel the overlay and
         // apply this switch immediately. Rapid repeats skip the new slide.
@@ -330,12 +484,18 @@ export class SpaceManager {
         const incomingParkWs = state.parkWs[spaceIndex];
 
         // Mutter creates workspaces in response to a settings change, so it can
-        // briefly lag our bookkeeping right after a rebuild.
-        const nWorkspaces = global.workspace_manager.get_n_workspaces();
+        // briefly lag our bookkeeping right after a new space is added. Without
+        // the workspace, the space exists in the list and the switch is dropped.
+        let nWorkspaces = global.workspace_manager.get_n_workspaces();
         if (outgoingParkWs >= nWorkspaces || incomingParkWs >= nWorkspaces) {
             this._ensureWorkspaces(this._requiredWorkspaceCount());
-            return;
+            nWorkspaces = global.workspace_manager.get_n_workspaces();
+            if (outgoingParkWs >= nWorkspaces || incomingParkWs >= nWorkspaces) {
+                this._deferSwitch(monitorIndex, spaceIndex, direction);
+                return;
+            }
         }
+        this._pendingSwitches.delete(monitorIndex);
 
         // Move the windows first, then build the overlay on top of the finished
         // result. Clutter has not painted a frame yet, so nothing is visible.
@@ -352,6 +512,76 @@ export class SpaceManager {
             this._animateSlide(monitor, outgoingParkWs, direction);
         this._compactEmptySpaces(monitorIndex);
         this._notify();
+    }
+
+    _deferSwitch(monitorIndex, spaceIndex, direction) {
+        const prev = this._pendingSwitches.get(monitorIndex);
+        this._pendingSwitches.set(monitorIndex, {
+            spaceIndex,
+            direction,
+            tries: prev?.tries ?? 0,
+        });
+
+        if (!this._nWorkspacesId) {
+            this._nWorkspacesId = global.workspace_manager.connect(
+                'notify::n-workspaces', () => this._flushDeferredSwitches());
+        }
+        this._scheduleDeferredFlush();
+    }
+
+    _scheduleDeferredFlush() {
+        if (this._deferredSwitchIdle)
+            return;
+        this._deferredSwitchIdle = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 30, () => {
+            this._deferredSwitchIdle = 0;
+            this._flushDeferredSwitches();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _flushDeferredSwitches() {
+        if (this._paused || this._flushingDeferred) {
+            if (this._flushingDeferred)
+                this._flushAgain = true;
+            return;
+        }
+
+        this._flushingDeferred = true;
+        try {
+            let spins = 0;
+            do {
+                this._flushAgain = false;
+                spins++;
+                for (const [monitorIndex, pending] of [...this._pendingSwitches]) {
+                    pending.tries++;
+                    if (pending.tries > 8) {
+                        this._pendingSwitches.delete(monitorIndex);
+                        continue;
+                    }
+                    this.switchTo(monitorIndex, pending.spaceIndex, pending.direction);
+                }
+            } while (this._flushAgain && spins < 3);
+        } finally {
+            this._flushingDeferred = false;
+        }
+
+        if (this._pendingSwitches.size === 0)
+            this._cancelDeferredSwitches();
+        else
+            this._scheduleDeferredFlush();
+    }
+
+    _cancelDeferredSwitches() {
+        this._pendingSwitches.clear();
+        this._flushAgain = false;
+        if (this._nWorkspacesId) {
+            global.workspace_manager.disconnect(this._nWorkspacesId);
+            this._nWorkspacesId = 0;
+        }
+        if (this._deferredSwitchIdle) {
+            GLib.source_remove(this._deferredSwitchIdle);
+            this._deferredSwitchIdle = 0;
+        }
     }
 
     /** Send everything this monitor currently shows off to its parking spot. */
@@ -461,6 +691,13 @@ export class SpaceManager {
             if (this._collapsesEmpty() && this._isSpaceEmpty(monitorIndex, state.current))
                 return null;
             const added = this.addSpace(monitorIndex);
+            if (added === null)
+                return null;
+            target = added;
+        } else if (delta < 0 && state.current === 0) {
+            if (this._collapsesEmpty() && this._isSpaceEmpty(monitorIndex, state.current))
+                return null;
+            const added = this._insertSpace(monitorIndex, 0);
             if (added === null)
                 return null;
             target = added;
@@ -990,8 +1227,12 @@ export class SpaceManager {
      * belongs to, and put the active workspace back on STAGE.
      */
     handleActiveWorkspaceChanged() {
-        if (this._internal || this._workspaceFixId)
+        if (this._internal || this._paused || this._workspaceFixId)
             return;
+
+        // Captured now so a resume that activates a parking workspace is not
+        // later read as the user asking to switch space.
+        const restoreOnly = this._holdLayout || Main.sessionMode.isLocked;
 
         // Activating STAGE from inside this signal re-enters the shell's
         // workspace-view scroll, which activates another workspace, which
@@ -999,7 +1240,12 @@ export class SpaceManager {
         // has returned, then put the stage back.
         this._workspaceFixId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
             this._workspaceFixId = 0;
-            this._correctActiveWorkspace();
+            if (this._internal || this._paused)
+                return GLib.SOURCE_REMOVE;
+            if (restoreOnly)
+                this._activateStage();
+            else
+                this._correctActiveWorkspace();
             return GLib.SOURCE_REMOVE;
         });
     }

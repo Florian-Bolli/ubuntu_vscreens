@@ -41,6 +41,9 @@ class SpaceSwitcherPopup extends Clutter.Actor {
         this._dragClone = null;
         this._suppressClick = false;
         this._unredirectHeld = false;
+        this._pointerInside = false;
+        this._shownIndex = -1;
+        this._shownCount = 0;
 
         this.add_constraint(new Layout.MonitorConstraint({index: monitorIndex}));
 
@@ -57,8 +60,14 @@ class SpaceSwitcherPopup extends Clutter.Actor {
 
         // Keep the popup up while the pointer is on it, so the close buttons
         // are actually reachable instead of racing the fade-out.
-        this._card.connect('enter-event', () => this._cancelHide());
-        this._card.connect('leave-event', () => this._scheduleHide());
+        this._card.connect('enter-event', () => {
+            this._pointerInside = true;
+            this._cancelHide();
+        });
+        this._card.connect('leave-event', () => {
+            this._pointerInside = false;
+            this._scheduleHide();
+        });
 
         this._header = new St.BoxLayout({
             style_class: 'vscreens-switcher-header',
@@ -107,6 +116,8 @@ class SpaceSwitcherPopup extends Clutter.Actor {
      * and the shell calls it internally.
      */
     showSpace(spaceIndex, nSpaces) {
+        this._shownIndex = spaceIndex;
+        this._shownCount = nSpaces;
         this._rebuild(spaceIndex, nSpaces);
 
         if (!this.visible || this._fadingOut) {
@@ -128,6 +139,24 @@ class SpaceSwitcherPopup extends Clutter.Actor {
         this._holdUnredirect();
 
         this._scheduleHide();
+    }
+
+    /**
+     * The space list changed while this popup was already open. A swipe that
+     * has to wait for the new workspace lands here a moment later.
+     */
+    syncIfShown() {
+        if (!this.visible || this._fadingOut || this._press || this._dragClone)
+            return;
+        const state = this._spaceManager.monitorStates
+            .find(s => s.monitorIndex === this._monitorIndex);
+        if (!state)
+            return;
+        if (this._shownIndex === state.current && this._shownCount === state.nSpaces)
+            return;
+        this.showSpace(state.current, state.nSpaces);
+        if (this._pointerInside)
+            this._cancelHide();
     }
 
     _cancelHide() {
